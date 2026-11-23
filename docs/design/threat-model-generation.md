@@ -86,7 +86,7 @@ Every record in `ThreatModelReport` carries an explicit [`EvidenceProvenance`](.
 - **Zero `discover` overhead:** `rgctl discover .` is completely untouched (0 bytes added to `Symbol`, `Relation`, `NodeRow`, or `EdgeRow`; Gate A cold baselines unaffected).
 - **Streaming hot-column scan:** `build_threat_model` reads `node_type_at`, `node_name_str`, `node_qualified_name_str`, `node_file_path_str`, `node_lines_at`, and `for_each_edge` directly from `ColumnarGraphMmap` without touching `ColdMetadataDb` (`NodeExtension` blobs).
 - **Bounded lazy CFG/PDG (`--max-pdg-functions`, default `DEFAULT_MAX_LAZY_PDG_FUNCTIONS = 64`):** Functions reachable from entry points are ordered by `(min_hops, file, start_line)` and evaluated lazily in memory (`persist: false`) up to the budget, while still scanning 100% of graph + parked sinks repo-wide.
-- **Measured scale (linux, 1.81M nodes, release, M-series):** ~6–7 s wall, ~2.4 GB peak, byte-identical JSON across runs. Sink classification is memoized per (callee, language) and parked calls are classified on Rayon then applied in record order; enable `RUST_LOG=profile=info` for per-stage `[profile] threat-model …` timings.
+- **Measured scale (linux, 1.81M nodes, release, M-series):** ~5.0 s wall (`load_nodes` 0.33 s, `edge_pass` 0.25 s, `lazy_pdg` 0.03 s), ~2.0 GiB peak memory footprint, byte-identical JSON across runs. Node metadata borrows strings zero-copy from `ColumnarGraphMmap` with an interned file table; sink classification is memoized per (callee, language); lazy PDG groups functions per file on Rayon using snapshot `decl_byte_span` directly; and parked calls are classified on Rayon then applied in record order. Enable `RUST_LOG=profile=info` for per-stage `[profile] threat-model …` timings on `stderr`.
 - **No silent caps:** every bound that can hide evidence is reported in `limitations_and_gaps` with counts — `CALL_DEPTH_LIMITED` (BFS frontier hit `--max-depth` with unexplored callees) and `PDG_BUDGET_EXHAUSTED` (reachable functions beyond `--max-pdg-functions`, or all of them under `--no-lazy-cfg`). The Mermaid DFD caps nodes for legibility but always emits an `OMITTED` node with counts; JSON is never truncated.
 - **Sink lines:** PDG-verified and parked (external) sinks carry the exact statement line. Graph-only sinks (from a `Calls` edge, no PDG coverage) carry the **caller's start line**, because hot edge columns store no call-site line.
 - **Offline-by-default determinism:** Zero outbound HTTP requests occur unless `--online` is explicitly passed. All collections use canonical `(file, line, symbol)` / `BTreeMap` ordering so consecutive runs produce byte-identical JSON, Markdown, and Mermaid outputs.
@@ -234,7 +234,7 @@ rgctl vuln threat-model --offline -o THREAT_MODEL.md
 | File | Responsibility |
 | :--- | :--- |
 | [`crates/rgctl-security/src/threat_model.rs`](../../crates/rgctl-security/src/threat_model.rs) | `THREAT_MODEL_SCHEMA_VERSION = 1` types, hot-column `build_threat_model`, STRIDE rules, Mermaid DFD & Markdown renderers, unit tests. |
-| [`src/cli/threat_model.rs`](../../src/cli/threat_model.rs) | CLI handler, sidecar & offline OSV wiring, per-function cached lazy CFG/PDG `TaintAnalyzer` callback (`inspect_function_pdg_lazy`). |
+| [`src/cli/threat_model.rs`](../../src/cli/threat_model.rs) | CLI handler, sidecar & offline OSV wiring, parallel per-file cached lazy CFG/PDG `TaintAnalyzer` callback (`inspect_functions_pdg_parallel`). |
 | [`src/cli/mod.rs`](../../src/cli/mod.rs) & [`src/cli/vuln_deps.rs`](../../src/cli/vuln_deps.rs) | `VulnCommands::ThreatModel` (`visible_alias = "surface"`) and shared `evaluate_repo_vulns` batch pipeline. |
 | [`skills/rgctl-vuln/SKILL.md`](../../skills/rgctl-vuln/SKILL.md) & [`skills/rgctl/SKILL.md`](../../skills/rgctl/SKILL.md) | Layer-2 Mode C agent workflow, epistemic & privacy rules, and natural-language routing. |
 | [`tests/vuln_threat_model.rs`](../../tests/vuln_threat_model.rs) | End-to-end integration tests across Web/FastAPI, Java/Maven+OSV, and Rust CLI/batch archetypes + determinism & epistemic invariants. |
@@ -265,6 +265,8 @@ Two layers of evidence: the dogfood multi-service fixtures (`rgctl-tests/ecommer
 | `archetype_3_rust_cli` | `main -> deploy_bundle -> Command::new` `Tampering`; callback indirection (`hook(target)`) surfaced as `DYNAMIC_OR_INDIRECT_CALLS`. |
 | `multi_route_flows_keep_evidence_index_consistent…` | Byte-identical output across runs; every `DF-*` evidence record describes its own flow; `get_author` / `invalidate_cache` are not auth / validation controls. |
 | `scheduled_jobs_are_not_http_ingress` | `@Scheduled` handlers are `scheduled_job` entry points and never yield `Spoofing`. |
+| `unrelated_numeric_cast_and_ratelimit_never_suppress_proven_unsanitized_taint` | Unrelated numeric casts (`int(...)`) and rate-limit helpers (`rate_limit()`) never mask `proven_unsanitized_flow` `Tampering` candidates, while `rate_limit()` still suppresses `DenialOfService`. |
+| `overloaded_methods_report_proven_unsanitized_flow_without_cache_collision` | Overloaded Java methods (`query(int)` vs `query(HttpServletRequest)`) resolve by `Uuid` + `decl_byte_span` without colliding in per-file PDG caches. |
 
 ### 5.2 Manual Threat-Model Baseline Comparison (Signal vs Noise)
 

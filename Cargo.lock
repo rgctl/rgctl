@@ -3875,6 +3875,7 @@ dependencies = [
  "rgctl-extraction",
  "rgctl-graph",
  "rgctl-plugin-api",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_yaml",

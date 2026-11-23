@@ -11,7 +11,8 @@ use crate::analysis::{
     index_function_locations,
 };
 use anyhow::{Result, bail};
-use rgctl_analysis::{AnalysisResults, TaintSink};
+use rayon::prelude::*;
+use rgctl_analysis::{AnalysisResults, Sanitizer, TaintSink};
 use rgctl_graph::paths::artifact_path;
 use rgctl_security::{
     DiscoveredPdgSink, FunctionPdgReport, FunctionPdgRequest, OSV_CACHE_REL, PdgSinkStatus,
@@ -21,6 +22,7 @@ use rgctl_security::{
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub struct ThreatModelCliArgs {
     pub osv: Option<PathBuf>,
@@ -67,12 +69,6 @@ fn local_osv_cache_has_json(repo: &Path) -> bool {
         })
 }
 
-struct CachedFileSource {
-    source: String,
-    lang: String,
-    locations: Option<HashMap<String, FunctionLocation>>,
-}
-
 /// Extract a concise callee identifier from a statement (e.g. `subprocess.run(cmd)` -> `subprocess.run`).
 fn extract_call_callee(stmt: &str, fallback: &str) -> String {
     if let Some(paren_pos) = stmt.find('(') {
@@ -99,7 +95,11 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
     let run_start = std::time::Instant::now();
     let mut stage = std::time::Instant::now();
     let mut lap = |name: &str| {
-        tracing::info!(target: "profile", "[profile] threat-model stage {name}: {:.3}s", stage.elapsed().as_secs_f64());
+        tracing::info!(
+            target: "profile",
+            "[profile] threat-model stage {name}: {:.3}s",
+            stage.elapsed().as_secs_f64()
+        );
         stage = std::time::Instant::now();
     };
     let Some(store) = ctx.open_snapshot_store()? else {
@@ -166,8 +166,6 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
         .or_else(|| TaintRuleSet::bundled_shared().as_ref().ok())
         .unwrap_or(&empty_rules);
 
-    let mut file_cache: HashMap<String, Option<CachedFileSource>> = HashMap::new();
-    let mut fn_cache: HashMap<(String, String), FunctionPdgReport> = HashMap::new();
     let mut pdg_secs = 0.0f64;
 
     let report = build_threat_model(
@@ -187,23 +185,20 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
                 args.max_pdg_functions
             },
         },
-        |req: FunctionPdgRequest<'_>| {
-            if args.no_lazy_cfg {
-                return FunctionPdgReport::default();
+        |reqs: &[FunctionPdgRequest<'_>]| {
+            if args.no_lazy_cfg || reqs.is_empty() {
+                return vec![FunctionPdgReport::default(); reqs.len()];
             }
             let t = std::time::Instant::now();
-            let rep = inspect_function_pdg_lazy(
-                &ctx.repo,
-                taint_rules,
-                &mut file_cache,
-                &mut fn_cache,
-                &req,
-            );
+            let out = inspect_functions_pdg_parallel(&ctx.repo, taint_rules, reqs);
             pdg_secs += t.elapsed().as_secs_f64();
-            rep
+            out
         },
     )?;
-    tracing::info!(target: "profile", "[profile] threat-model lazy_pdg (inside build): {pdg_secs:.3}s");
+    tracing::info!(
+        target: "profile",
+        "[profile] threat-model lazy_pdg (inside build): {pdg_secs:.3}s"
+    );
     lap("build_threat_model");
 
     let emitted = match ctx.format {
@@ -217,97 +212,163 @@ pub fn run_vuln_threat_model(ctx: &CliContext, args: ThreatModelCliArgs) -> Resu
         }
     };
     lap("emit");
-    tracing::info!(target: "profile", "[profile] threat-model total: {:.3}s", run_start.elapsed().as_secs_f64());
+    tracing::info!(
+        target: "profile",
+        "[profile] threat-model total: {:.3}s",
+        run_start.elapsed().as_secs_f64()
+    );
     emitted
 }
 
-fn inspect_function_pdg_lazy(
+/// Evaluate lazy CFG/PDG taint across entry-reachable functions grouped by file in parallel.
+///
+/// Keyed by `function_id: Uuid` + exact `decl_byte_span` from the columnar snapshot so overloaded
+/// or same-short-name methods in a file never collide, and full-file `index_function_locations`
+/// parsing is skipped whenever `decl_byte_span` is present.
+fn inspect_functions_pdg_parallel(
     repo_root: &Path,
     taint_rules: &TaintRuleSet,
-    file_cache: &mut HashMap<String, Option<CachedFileSource>>,
-    fn_cache: &mut HashMap<(String, String), FunctionPdgReport>,
-    req: &FunctionPdgRequest<'_>,
-) -> FunctionPdgReport {
-    let fn_key = (req.file.to_string(), req.function_fqn.to_string());
-    if let Some(existing) = fn_cache.get(&fn_key) {
-        return existing.clone();
+    reqs: &[FunctionPdgRequest<'_>],
+) -> Vec<FunctionPdgReport> {
+    let mut by_file: BTreeMap<&str, Vec<(usize, &FunctionPdgRequest<'_>)>> = BTreeMap::new();
+    for (idx, req) in reqs.iter().enumerate() {
+        by_file.entry(req.file).or_default().push((idx, req));
     }
+    let groups: Vec<(&str, Vec<(usize, &FunctionPdgRequest<'_>)>)> = by_file.into_iter().collect();
 
-    let cached_file = file_cache.entry(req.file.to_string()).or_insert_with(|| {
-        let rel_path = Path::new(req.file);
-        let abs_path = if rel_path.is_absolute() {
-            rel_path.to_path_buf()
-        } else {
-            repo_root.join(rel_path)
-        };
-        let lang_id = crate::analysis::language_id_from_path(&abs_path)?;
-        let lang = language_from_path(&abs_path);
-        if lang == "markdown" || lang_id == "hcl" {
-            return None;
+    let group_results: Vec<Vec<(usize, FunctionPdgReport)>> = groups
+        .par_iter()
+        .map(|(file, items)| inspect_file_group(repo_root, taint_rules, file, items))
+        .collect();
+
+    let mut out = vec![FunctionPdgReport::default(); reqs.len()];
+    for batch in group_results {
+        for (orig_idx, rep) in batch {
+            out[orig_idx] = rep;
         }
-        let source = std::fs::read_to_string(&abs_path).ok()?;
-        let locations = index_function_locations(&lang, source.as_bytes())
-            .ok()
-            .map(|(_, locs)| locs);
-        Some(CachedFileSource {
-            source,
-            lang,
-            locations,
-        })
-    });
+    }
+    out
+}
 
-    let Some(file_entry) = cached_file.as_ref() else {
-        let empty = FunctionPdgReport::default();
-        fn_cache.insert(fn_key, empty.clone());
-        return empty;
+fn inspect_file_group(
+    repo_root: &Path,
+    taint_rules: &TaintRuleSet,
+    file: &str,
+    items: &[(usize, &FunctionPdgRequest<'_>)],
+) -> Vec<(usize, FunctionPdgReport)> {
+    let rel_path = Path::new(file);
+    let abs_path = if rel_path.is_absolute() {
+        rel_path.to_path_buf()
+    } else {
+        repo_root.join(rel_path)
+    };
+    let Some(lang_id) = crate::analysis::language_id_from_path(&abs_path) else {
+        return items
+            .iter()
+            .map(|&(idx, _)| (idx, FunctionPdgReport::default()))
+            .collect();
+    };
+    let lang = language_from_path(&abs_path);
+    if lang == "markdown" || lang_id == "hcl" {
+        return items
+            .iter()
+            .map(|&(idx, _)| (idx, FunctionPdgReport::default()))
+            .collect();
+    }
+    let Ok(source) = std::fs::read_to_string(&abs_path) else {
+        return items
+            .iter()
+            .map(|&(idx, _)| (idx, FunctionPdgReport::default()))
+            .collect();
     };
 
-    let resolved_fn = file_entry.locations.as_ref().and_then(|locs| {
-        // Probe `start_line` and `start_line + 1` (accounts for decorator line vs `def`/`fn` line).
-        line_start_byte(&file_entry.source, req.start_line as usize)
-            .and_then(|off| function_containing_line(locs, off))
-            .or_else(|| {
-                line_start_byte(
-                    &file_entry.source,
-                    req.start_line.saturating_add(1) as usize,
-                )
-                .and_then(|off| function_containing_line(locs, off))
-            })
-    });
-    let fallback_short = req
+    // Only parse a fallback location map when at least one request lacked a snapshot byte span.
+    let fallback_locations: Option<HashMap<String, FunctionLocation>> = items
+        .iter()
+        .any(|(_, r)| r.decl_byte_span.is_none())
+        .then(|| {
+            index_function_locations(&lang, source.as_bytes())
+                .ok()
+                .map(|(_, locs)| locs)
+        })
+        .flatten();
+
+    let mut fn_cache: HashMap<Uuid, FunctionPdgReport> = HashMap::with_capacity(items.len());
+    let mut results = Vec::with_capacity(items.len());
+
+    for &(orig_idx, req) in items {
+        if let Some(existing) = fn_cache.get(&req.function_id) {
+            results.push((orig_idx, existing.clone()));
+            continue;
+        }
+        let rep = evaluate_single_function_pdg(
+            repo_root,
+            taint_rules,
+            &lang,
+            &source,
+            fallback_locations.as_ref(),
+            req,
+        );
+        fn_cache.insert(req.function_id, rep.clone());
+        results.push((orig_idx, rep));
+    }
+    results
+}
+
+fn evaluate_single_function_pdg(
+    repo_root: &Path,
+    taint_rules: &TaintRuleSet,
+    lang: &str,
+    source: &str,
+    fallback_locations: Option<&HashMap<String, FunctionLocation>>,
+    req: &FunctionPdgRequest<'_>,
+) -> FunctionPdgReport {
+    let short_name = req
         .function_fqn
         .rsplit(['.', ':', '\\'])
         .next()
         .unwrap_or(req.function_fqn)
         .to_string();
-    let (fn_name, start_byte, end_byte, fn_id) = match resolved_fn {
-        Some((name, loc)) => (name, Some(loc.start_byte), Some(loc.end_byte), None),
-        None => (fallback_short, None, None, Some(req.function_id)),
+
+    let (fn_name, start_byte, end_byte) = if let Some((s, e)) = req.decl_byte_span
+        && s < e
+        && e <= source.len()
+    {
+        (short_name, Some(s), Some(e))
+    } else if let Some(locs) = fallback_locations
+        && let Some((name, loc)) = line_start_byte(source, req.start_line as usize)
+            .and_then(|off| function_containing_line(locs, off))
+            .or_else(|| {
+                line_start_byte(source, req.start_line.saturating_add(1) as usize)
+                    .and_then(|off| function_containing_line(locs, off))
+            })
+    {
+        (name, Some(loc.start_byte), Some(loc.end_byte))
+    } else {
+        (short_name, None, None)
     };
 
     let Ok(record) = ensure_cfg_pdg_for_source(EnsureCfgPdgOpts {
         repo_root,
-        language: &file_entry.lang,
-        source: &file_entry.source,
+        language: lang,
+        source,
         function_name: &fn_name,
         file_path: Some(req.file),
         start_byte,
         end_byte,
-        function_id: fn_id,
+        function_id: Some(req.function_id),
         persist: false,
     }) else {
-        let empty = FunctionPdgReport::default();
-        fn_cache.insert(fn_key, empty.clone());
-        return empty;
+        return FunctionPdgReport::default();
     };
 
     let pdg = record.pdg.as_ref();
     let cfg = record.cfg.as_ref();
     let mut analyzer = TaintAnalyzer::new(pdg, cfg);
-    analyzer.detect_patterns_with_rules(&file_entry.lang, taint_rules);
+    analyzer.detect_patterns_with_rules(lang, taint_rules);
     let flows = analyzer.analyze();
 
-    let compiled_lang = taint_rules.for_language(&file_entry.lang);
+    let compiled_lang = taint_rules.for_language(lang);
     let mut has_sanitizer = false;
     let mut has_audit_log = false;
     let mut by_line: BTreeMap<(u32, String), DiscoveredPdgSink> = BTreeMap::new();
@@ -329,15 +390,19 @@ fn inspect_function_pdg_lazy(
         let line = node.statement.line as u32;
         let extracted_callee = extract_call_callee(text, text);
 
-        if compiled_lang.and_then(|c| c.classify(text).2).is_some()
-            || classify_callee_sanitizer(taint_rules, &file_entry.lang, &extracted_callee)
+        // Exclude generic numeric/type casts (`int(`, `parseInt(`) from function-wide sanitizer
+        // presence; `TaintAnalyzer` already tracks dominator casts per-variable on `flows`.
+        if compiled_lang
+            .and_then(|c| c.classify(text).2)
+            .is_some_and(|s| !matches!(s, Sanitizer::TypeCast(_)))
+            || classify_callee_sanitizer(taint_rules, lang, &extracted_callee)
         {
             has_sanitizer = true;
         }
 
         let sink_opt = compiled_lang
             .and_then(|c| c.classify(text).1)
-            .or_else(|| classify_callee_sink(taint_rules, &file_entry.lang, &extracted_callee));
+            .or_else(|| classify_callee_sink(taint_rules, lang, &extracted_callee));
 
         let Some(sink_kind) = sink_opt else {
             continue;
@@ -404,12 +469,10 @@ fn inspect_function_pdg_lazy(
         }
     }
 
-    let report = FunctionPdgReport {
+    FunctionPdgReport {
         evaluated: true,
         has_sanitizer,
         has_audit_log,
         sinks: by_line.into_values().collect(),
-    };
-    fn_cache.insert(fn_key, report.clone());
-    report
+    }
 }

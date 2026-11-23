@@ -14,13 +14,14 @@
 
 use crate::vuln_analyze::{ExploitabilityVerdict, VulnAnalyzeResult};
 use rayon::prelude::*;
-use rgctl_analysis::{AnalysisResults, CommunityQueryContext, TaintRuleSet, TaintSink};
+use rgctl_analysis::{AnalysisResults, CommunityQueryContext, Sanitizer, TaintRuleSet, TaintSink};
 use rgctl_extraction::ParkedRelationRecord;
 use rgctl_graph::columnar_snapshot::ColumnarGraphMmap;
 use rgctl_graph::schema::{EdgeType, NodeType};
 use rgctl_plugin_api::RelationType;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::path::Path;
 use uuid::Uuid;
@@ -350,6 +351,8 @@ pub struct FunctionPdgRequest<'a> {
     pub function_fqn: &'a str,
     pub file: &'a str,
     pub start_line: u32,
+    /// Optional declaration `(start_byte, end_byte)` from the snapshot's Green span tail.
+    pub decl_byte_span: Option<(usize, usize)>,
 }
 
 /// Sink discovered or verified inside a function's intra-procedural PDG.
@@ -370,23 +373,36 @@ pub struct FunctionPdgReport {
     pub sinks: Vec<DiscoveredPdgSink>,
 }
 
-#[derive(Clone)]
-struct CompactNodeMeta {
+const NO_FILE_ID: u32 = u32::MAX;
+
+#[derive(Clone, Copy)]
+struct CompactNodeMeta<'a> {
     id: Uuid,
     node_type: NodeType,
-    name: String,
-    qualified_name: Option<String>,
-    file: Option<String>,
+    name: &'a str,
+    qualified_name: Option<&'a str>,
+    file_id: u32,
     start_line: u32,
     is_declaration: bool,
 }
 
-impl CompactNodeMeta {
-    fn display_fqn(&self) -> &str {
-        if self.node_type == NodeType::File {
-            return self.file.as_deref().unwrap_or(&self.name);
+impl<'a> CompactNodeMeta<'a> {
+    #[inline]
+    fn file<'b>(&self, files: &'b [String]) -> Option<&'b str> {
+        (self.file_id != NO_FILE_ID).then(|| files[self.file_id as usize].as_str())
+    }
+
+    #[inline]
+    fn display_fqn<'b>(&self, files: &'b [String]) -> &'b str
+    where
+        'a: 'b,
+    {
+        if self.node_type == NodeType::File
+            && let Some(f) = self.file(files)
+        {
+            return f;
         }
-        self.qualified_name.as_deref().unwrap_or(&self.name)
+        self.qualified_name.unwrap_or(self.name)
     }
 }
 
@@ -584,24 +600,58 @@ pub fn classify_callee_sink(rules: &TaintRuleSet, lang: &str, callee: &str) -> O
 }
 
 /// Classify whether a callee/statement expression acts as an input sanitizer.
+///
+/// Excludes generic numeric/type casts (`Sanitizer::TypeCast` such as `int(`, `parseInt(`) so
+/// unrelated casts inside a handler never mask an unsanitized path to a sibling sink, and requires
+/// shell/SQL/URL qualification for generic `quote(...)` helpers so domain methods like
+/// `PricingService.quote(cart)` are not misclassified.
 pub fn classify_callee_sanitizer(rules: &TaintRuleSet, lang: &str, callee: &str) -> bool {
     let probe = format!("{callee}(");
     if let Some(compiled) = rules.for_language(lang) {
         let (_, _, san) = compiled.classify(&probe);
-        if san.is_some() {
+        if matches!(san, Some(s) if !matches!(s, Sanitizer::TypeCast(_))) {
             return true;
         }
     }
     let tail = callee
         .rsplit(['.', ':', '\\', '/'])
         .next()
-        .unwrap_or(callee)
-        .to_ascii_lowercase();
-    tail.starts_with("sanitize")
-        || tail.starts_with("escape")
-        || tail.starts_with("validate")
-        || tail == "quote"
-        || tail == "shlex_quote"
+        .unwrap_or(callee);
+    let method_tokens = identifier_tokens(tail);
+    if method_tokens.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "sanitize"
+                | "sanitized"
+                | "sanitizer"
+                | "escape"
+                | "escaped"
+                | "validate"
+                | "validated"
+        )
+    }) {
+        return true;
+    }
+    let tokens = identifier_tokens(callee);
+    let Some(last) = tokens.last().map(String::as_str) else {
+        return false;
+    };
+    let qualifier_tokens = &tokens[..tokens.len().saturating_sub(1)];
+    if tokens.windows(2).any(|w| {
+        matches!(
+            (w[0].as_str(), w[1].as_str()),
+            ("shlex", "quote") | ("shell", "quote") | ("sql", "quote") | ("html", "escape")
+        )
+    }) {
+        return true;
+    }
+    last == "quote"
+        && qualifier_tokens.iter().any(|q| {
+            matches!(
+                q.as_str(),
+                "shlex" | "shell" | "sql" | "urllib" | "parse" | "mysql" | "pg" | "sqlite"
+            )
+        })
 }
 
 /// `[profile]` lap for `build_threat_model` stages (`RUST_LOG=profile=info`).
@@ -707,9 +757,10 @@ fn is_auth_control_name(name: &str) -> bool {
     tokens_match(&identifier_tokens(name), WORDS, PAIRS)
 }
 
-/// Whole-token validation / rate-limit match: `validate_input`, `@Valid`, `RateLimiter` match;
-/// `invalidate_cache`, `get_schema_version` do not.
-fn is_validation_or_ratelimit_name(name: &str) -> bool {
+/// Whole-token input-validation / sanitizer match (`validate_input`, `@Valid`, `sanitize`).
+/// Kept distinct from rate-limiting (`RateLimiter`, `throttle`) so rate limiters suppress DoS
+/// candidates without masking SQL/command injection (`Tampering`).
+fn is_input_validation_name(name: &str) -> bool {
     const WORDS: &[&str] = &[
         "valid",
         "validate",
@@ -720,6 +771,12 @@ fn is_validation_or_ratelimit_name(name: &str) -> bool {
         "sanitize",
         "sanitized",
         "sanitizer",
+    ];
+    tokens_match(&identifier_tokens(name), WORDS, &[])
+}
+
+fn is_ratelimit_name(name: &str) -> bool {
+    const WORDS: &[&str] = &[
         "throttle",
         "throttled",
         "throttler",
@@ -729,6 +786,12 @@ fn is_validation_or_ratelimit_name(name: &str) -> bool {
     ];
     const PAIRS: &[(&str, &str)] = &[("rate", "limit"), ("rate", "limiter"), ("rate", "limited")];
     tokens_match(&identifier_tokens(name), WORDS, PAIRS)
+}
+
+/// Whole-token validation / rate-limit match used by unit tests.
+#[cfg(test)]
+fn is_validation_or_ratelimit_name(name: &str) -> bool {
+    is_input_validation_name(name) || is_ratelimit_name(name)
 }
 
 fn is_handler_annotation(name: &str) -> bool {
@@ -761,33 +824,105 @@ fn is_handler_annotation(name: &str) -> bool {
 }
 
 fn classify_config_asset(name: &str) -> AssetKind {
-    let upper = name.to_ascii_uppercase();
-    if upper.contains("SECRET")
-        || upper.contains("TOKEN")
-        || upper.contains("PASSWORD")
-        || upper.contains("PASSWD")
-        || upper.contains("PRIVATE_KEY")
-        || upper.contains("API_KEY")
-        || upper.contains("APIKEY")
-        || upper.contains("CREDENTIAL")
-        || upper.contains("JWT")
-        || upper.contains("SIGNING_KEY")
-    {
+    const SECRET_WORDS: &[&str] = &[
+        "secret",
+        "secrets",
+        "password",
+        "passwd",
+        "pwd",
+        "credential",
+        "credentials",
+        "jwt",
+        "apikey",
+        "privatekey",
+        "signingkey",
+        "passphrase",
+    ];
+    const SECRET_PAIRS: &[(&str, &str)] = &[
+        ("private", "key"),
+        ("api", "key"),
+        ("signing", "key"),
+        ("secret", "key"),
+        ("access", "key"),
+        ("client", "secret"),
+        ("encryption", "key"),
+        ("master", "key"),
+        ("hmac", "key"),
+    ];
+    const ENDPOINT_WORDS: &[&str] = &[
+        "url",
+        "uri",
+        "host",
+        "hostname",
+        "dsn",
+        "endpoint",
+        "endpoints",
+        "port",
+        "redis",
+        "kafka",
+        "postgres",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "database",
+        "datasource",
+    ];
+    const ENDPOINT_PAIRS: &[(&str, &str)] = &[
+        ("db", "name"),
+        ("db", "user"),
+        ("db", "host"),
+        ("db", "port"),
+        ("db", "url"),
+        ("db", "uri"),
+        ("db", "pool"),
+    ];
+
+    let tokens = identifier_tokens(name);
+    let has_token_secret = tokens.iter().any(|t| t == "token" || t == "tokens")
+        && !tokens.iter().any(|t| {
+            matches!(
+                t.as_str(),
+                "max"
+                    | "min"
+                    | "count"
+                    | "limit"
+                    | "len"
+                    | "length"
+                    | "lexer"
+                    | "parser"
+                    | "ast"
+                    | "syntax"
+                    | "budget"
+            )
+        });
+
+    if has_token_secret || tokens_match(&tokens, SECRET_WORDS, SECRET_PAIRS) {
         AssetKind::SecretOrCredentialConfig
-    } else if upper.contains("URL")
-        || upper.contains("URI")
-        || upper.contains("HOST")
-        || upper.contains("DSN")
-        || upper.contains("ENDPOINT")
-        || upper.contains("PORT")
-        || upper.contains("DB_")
-        || upper.contains("REDIS")
-        || upper.contains("KAFKA")
-    {
+    } else if tokens_match(&tokens, ENDPOINT_WORDS, ENDPOINT_PAIRS) {
         AssetKind::ConnectionOrEndpointConfig
     } else {
         AssetKind::RuntimeConfig
     }
+}
+
+fn is_unreferenced_metadata_config_file(rel_file: &str) -> bool {
+    let file_name = Path::new(rel_file)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(rel_file);
+    matches!(
+        file_name,
+        "Cargo.toml"
+            | "Cargo.lock"
+            | "package.json"
+            | "package-lock.json"
+            | "tsconfig.json"
+            | "languages.toml"
+            | "release.toml"
+            | "correctness-manifest.json"
+            | "expected-findings.json"
+            | "baseline.json"
+    ) || file_name.ends_with("-ast-coverage.json")
 }
 
 fn is_sensitive_domain_model_name(name: &str) -> bool {
@@ -813,9 +948,15 @@ fn is_sensitive_domain_model_name(name: &str) -> bool {
 }
 
 fn is_test_or_fixture_noise_file(rel_file: &str) -> bool {
-    rel_file.starts_with("tests/")
+    rel_file == "build.rs"
+        || rel_file.ends_with("/build.rs")
+        || rel_file.starts_with("tests/")
         || rel_file.contains("/tests/")
         || rel_file.contains("/__tests__/")
+        || rel_file.starts_with("benches/")
+        || rel_file.contains("/benches/")
+        || rel_file.starts_with("examples/")
+        || rel_file.contains("/examples/")
         || rel_file.starts_with("src/test/")
         || rel_file.contains("/src/test/")
         || rel_file.ends_with("_test.go")
@@ -829,50 +970,62 @@ fn is_test_or_fixture_noise_file(rel_file: &str) -> bool {
 /// Build a deterministic [`ThreatModelReport`] directly from hot columnar snapshot arrays.
 pub fn build_threat_model<F>(
     opts: ThreatModelBuildOpts<'_>,
-    mut inspect_function_pdg: F,
+    mut inspect_functions_pdg: F,
 ) -> rgctl_error::Result<ThreatModelReport>
 where
-    F: FnMut(FunctionPdgRequest<'_>) -> FunctionPdgReport,
+    F: FnMut(&[FunctionPdgRequest<'_>]) -> Vec<FunctionPdgReport>,
 {
     let col = opts.columnar;
     let canon_repo = opts.repo_root.canonicalize().ok();
     let n_count = col.node_count();
     let mut stage_clock = std::time::Instant::now();
 
-    let mut nodes: Vec<CompactNodeMeta> = Vec::with_capacity(n_count);
-    let mut id_to_idx: HashMap<Uuid, usize> = HashMap::with_capacity(n_count);
-    let mut class_by_qn: HashMap<String, usize> = HashMap::new();
-    let mut class_by_short_name: HashMap<String, Option<usize>> = HashMap::new();
+    let mut nodes: Vec<CompactNodeMeta<'_>> = Vec::with_capacity(n_count);
+    let mut file_table: Vec<String> = Vec::new();
+    let mut raw_file_to_id: FxHashMap<&str, u32> = FxHashMap::default();
+    let mut id_to_idx: FxHashMap<Uuid, u32> =
+        FxHashMap::with_capacity_and_hasher(n_count, Default::default());
+    let mut class_by_qn: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut class_by_short_name: FxHashMap<&str, Option<usize>> = FxHashMap::default();
 
     for idx in 0..n_count {
         let id = col.node_id_at(idx)?;
         let node_type = col.node_type_at(idx)?;
-        let name = col.node_name_str(idx)?.to_string();
-        let qualified_name = col.node_qualified_name_str(idx)?.map(str::to_string);
-        let file = col
-            .node_file_path_str(idx)?
-            .map(|f| relativize_path(opts.repo_root, canon_repo.as_deref(), f));
+        let name = col.node_name_str(idx)?;
+        let qualified_name = col.node_qualified_name_str(idx)?;
+        let file_id = match col.node_file_path_str(idx)? {
+            Some(raw_f) => *raw_file_to_id.entry(raw_f).or_insert_with(|| {
+                let fid = file_table.len() as u32;
+                file_table.push(relativize_path(
+                    opts.repo_root,
+                    canon_repo.as_deref(),
+                    raw_f,
+                ));
+                fid
+            }),
+            None => NO_FILE_ID,
+        };
         let (start_line, _) = col.node_lines_at(idx)?;
         let is_declaration = col.node_is_declaration_at(idx).unwrap_or(false);
 
         if matches!(node_type, NodeType::Class | NodeType::Struct) {
-            if let Some(qn) = &qualified_name {
-                class_by_qn.insert(qn.clone(), idx);
+            if let Some(qn) = qualified_name {
+                class_by_qn.insert(qn, idx);
             }
             // Short-name fallback only when unambiguous across the repo.
             class_by_short_name
-                .entry(name.clone())
+                .entry(name)
                 .and_modify(|slot| *slot = None)
                 .or_insert(Some(idx));
         }
 
-        id_to_idx.insert(id, idx);
+        id_to_idx.insert(id, idx as u32);
         nodes.push(CompactNodeMeta {
             id,
             node_type,
             name,
             qualified_name,
-            file,
+            file_id,
             start_line: start_line.unwrap_or(0) as u32,
             is_declaration,
         });
@@ -881,42 +1034,47 @@ where
     profile_lap(&mut stage_clock, "load_nodes");
     // Build typed adjacency lists in a single streaming edge pass.
     let mut calls_out: Vec<Vec<usize>> = vec![Vec::new(); n_count];
-    let mut calls_in_count: Vec<usize> = vec![0; n_count];
+    let mut calls_in_count: Vec<u32> = vec![0; n_count];
     let mut exposes_routes: Vec<(usize, usize)> = Vec::new();
-    let mut annotations_on: HashMap<usize, Vec<String>> = HashMap::new();
-    let mut injects_on: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut annotations_on: FxHashMap<usize, Vec<&str>> = FxHashMap::default();
+    let mut injects_on: FxHashMap<usize, Vec<&str>> = FxHashMap::default();
     let mut uses_config_edges: Vec<(usize, usize)> = Vec::new();
-    let mut references_out: Vec<Vec<usize>> = vec![Vec::new(); n_count];
+    let mut sensitive_refs_out: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
 
     col.for_each_edge(|from, to, edge_type| {
-        let (Some(&u), Some(&v)) = (id_to_idx.get(&from), id_to_idx.get(&to)) else {
+        let (Some(&u_raw), Some(&v_raw)) = (id_to_idx.get(&from), id_to_idx.get(&to)) else {
             return Ok(());
         };
+        let u = u_raw as usize;
+        let v = v_raw as usize;
         match edge_type {
             EdgeType::Calls => {
                 calls_out[u].push(v);
-                calls_in_count[v] += 1;
+                calls_in_count[v] = calls_in_count[v].saturating_add(1);
             }
             EdgeType::ExposesRoute => {
                 exposes_routes.push((u, v));
             }
             EdgeType::AnnotatedWith => {
-                annotations_on
-                    .entry(u)
-                    .or_default()
-                    .push(nodes[v].name.clone());
+                annotations_on.entry(u).or_default().push(nodes[v].name);
             }
             EdgeType::Injects => {
                 injects_on
                     .entry(u)
                     .or_default()
-                    .push(nodes[v].display_fqn().to_string());
+                    .push(nodes[v].qualified_name.unwrap_or(nodes[v].name));
             }
             EdgeType::UsesConfig => {
                 uses_config_edges.push((u, v));
             }
             EdgeType::References | EdgeType::Instantiates | EdgeType::Uses => {
-                references_out[u].push(v);
+                let tn = &nodes[v];
+                if tn.node_type == NodeType::Table
+                    || (matches!(tn.node_type, NodeType::Class | NodeType::Struct)
+                        && is_sensitive_domain_model_name(tn.name))
+                {
+                    sensitive_refs_out.entry(u).or_default().push(v);
+                }
             }
             _ => {}
         }
@@ -932,12 +1090,13 @@ where
     // Community resolution from `.rgctl/analysis_results.bin` when present.
     let community_ctx = opts.analysis.map(|a| {
         CommunityQueryContext::from_analysis(a, |uuid| {
-            id_to_idx
-                .get(&uuid)
-                .map(|&idx| (nodes[idx].name.clone(), nodes[idx].file.as_ref().cloned()))
+            id_to_idx.get(&uuid).map(|&idx_u32| {
+                let n = &nodes[idx_u32 as usize];
+                (n.name.to_string(), n.file(&file_table).map(str::to_string))
+            })
         })
     });
-    let mut community_labels_by_id: HashMap<usize, (String, usize)> = HashMap::new();
+    let mut community_labels_by_id: FxHashMap<usize, (String, usize)> = FxHashMap::default();
     if let Some(cctx) = &community_ctx {
         for c in &cctx.communities {
             community_labels_by_id.insert(c.id, (c.label.clone(), c.member_count));
@@ -962,29 +1121,32 @@ where
             .map(|(label, _)| label.clone())
     };
 
-    let mut parked_callees_by_caller: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut parked_callees_by_caller: FxHashMap<usize, Vec<String>> = FxHashMap::default();
     for rec in opts.parked_relations {
         if rec.relation_type == RelationType::Calls
             && let Some(&u) = id_to_idx.get(&rec.from_node_id)
+            && let Some(best) = parked_callee_candidates(rec).into_iter().next()
         {
-            if let Some(best) = parked_callee_candidates(rec).into_iter().next() {
-                parked_callees_by_caller.entry(u).or_default().push(best);
-            }
+            parked_callees_by_caller
+                .entry(u as usize)
+                .or_default()
+                .push(best);
         }
     }
 
-    // Helper: collect observed auth & validation controls on a handler + its enclosing class + direct callees.
-    let controls_for_handler = |h_idx: usize| -> (Vec<String>, Vec<String>) {
+    // Helper: collect observed auth, validation/ratelimit, and pure input-validator flag.
+    let controls_for_handler = |h_idx: usize| -> (Vec<String>, Vec<String>, bool) {
         let mut auth = BTreeSet::new();
         let mut validation = BTreeSet::new();
+        let mut has_input_validator = false;
         let mut candidates: Vec<String> = Vec::new();
         if let Some(anns) = annotations_on.get(&h_idx) {
-            candidates.extend(anns.iter().cloned());
+            candidates.extend(anns.iter().map(|s| (*s).to_string()));
         }
         if let Some(injs) = injects_on.get(&h_idx) {
-            candidates.extend(injs.iter().cloned());
+            candidates.extend(injs.iter().map(|s| (*s).to_string()));
         }
-        if let Some(qn) = &nodes[h_idx].qualified_name
+        if let Some(qn) = nodes[h_idx].qualified_name
             && let Some(owner) = qualified_owner(qn)
             && let Some(cls_idx) = class_by_qn.get(owner).copied().or_else(|| {
                 let short = qualified_owner_short_name(owner);
@@ -992,14 +1154,14 @@ where
             })
         {
             if let Some(anns) = annotations_on.get(&cls_idx) {
-                candidates.extend(anns.iter().cloned());
+                candidates.extend(anns.iter().map(|s| (*s).to_string()));
             }
             if let Some(injs) = injects_on.get(&cls_idx) {
-                candidates.extend(injs.iter().cloned());
+                candidates.extend(injs.iter().map(|s| (*s).to_string()));
             }
         }
         for &callee_idx in &calls_out[h_idx] {
-            candidates.push(nodes[callee_idx].display_fqn().to_string());
+            candidates.push(nodes[callee_idx].display_fqn(&file_table).to_string());
         }
         if let Some(ext_callees) = parked_callees_by_caller.get(&h_idx) {
             candidates.extend(ext_callees.iter().cloned());
@@ -1008,11 +1170,18 @@ where
             if is_auth_control_name(&c) {
                 auth.insert(c.clone());
             }
-            if is_validation_or_ratelimit_name(&c) {
+            if is_input_validation_name(&c) {
+                has_input_validator = true;
+                validation.insert(c);
+            } else if is_ratelimit_name(&c) {
                 validation.insert(c);
             }
         }
-        (auth.into_iter().collect(), validation.into_iter().collect())
+        (
+            auth.into_iter().collect(),
+            validation.into_iter().collect(),
+            has_input_validator,
+        )
     };
 
     profile_lap(&mut stage_clock, "communities");
@@ -1026,28 +1195,25 @@ where
         route_path: Option<String>,
     }
     let mut raw_entries: Vec<RawEntry> = Vec::new();
-    let mut seen_entry_handlers: HashMap<(usize, String), ()> = HashMap::new();
+    let mut seen_entry_handlers: FxHashSet<(usize, String)> = FxHashSet::default();
     // Handler indices already registered via `ExposesRoute` (O(1) membership, not a key scan).
-    let mut route_handlers: HashSet<usize> = HashSet::new();
+    let mut route_handlers: FxHashSet<usize> = FxHashSet::default();
 
     for &(h_idx, route_idx) in &exposes_routes {
         let h = &nodes[h_idx];
-        let Some(file) = h.file.as_deref() else {
+        let Some(file) = h.file(&file_table) else {
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
             continue;
         }
-        let route_label = nodes[route_idx].name.clone();
+        let route_label = nodes[route_idx].name.to_string();
         let (http_method, route_path) = match route_label.split_once(' ') {
             Some((m, p)) => (Some(m.trim().to_string()), Some(p.trim().to_string())),
             None => (None, Some(route_label.clone())),
         };
         route_handlers.insert(h_idx);
-        if seen_entry_handlers
-            .insert((h_idx, route_label.clone()), ())
-            .is_none()
-        {
+        if seen_entry_handlers.insert((h_idx, route_label.clone())) {
             raw_entries.push(RawEntry {
                 handler_idx: h_idx,
                 kind: EntryPointKind::HttpRoute,
@@ -1066,7 +1232,7 @@ where
         if h.node_type != NodeType::Function || h.is_declaration {
             continue;
         }
-        let Some(file) = h.file.as_deref() else {
+        let Some(file) = h.file(&file_table) else {
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
@@ -1075,12 +1241,9 @@ where
         if route_handlers.contains(&h_idx) {
             continue;
         }
-        if let Some(ann) = anns.iter().find(|a| is_handler_annotation(a)) {
-            let label = format!("@{ann} {}", h.display_fqn());
-            if seen_entry_handlers
-                .insert((h_idx, label.clone()), ())
-                .is_none()
-            {
+        if let Some(&ann) = anns.iter().find(|a| is_handler_annotation(a)) {
+            let label = format!("@{ann} {}", h.display_fqn(&file_table));
+            if seen_entry_handlers.insert((h_idx, label.clone())) {
                 let ann_lower = ann.to_ascii_lowercase();
                 let kind = if ann_lower.contains("scheduled") {
                     EntryPointKind::ScheduledJob
@@ -1108,7 +1271,7 @@ where
         if n.node_type != NodeType::Function || n.is_declaration {
             continue;
         }
-        let Some(file) = n.file.as_deref() else {
+        let Some(file) = n.file(&file_table) else {
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
@@ -1118,15 +1281,12 @@ where
             || (raw_entries.is_empty()
                 && calls_in_count[idx] == 0
                 && matches!(
-                    n.name.as_str(),
+                    n.name,
                     "run" | "execute" | "cli" | "dispatch" | "entrypoint"
                 ));
         if is_cli_main {
-            let label = format!("CLI {}", n.display_fqn());
-            if seen_entry_handlers
-                .insert((idx, label.clone()), ())
-                .is_none()
-            {
+            let label = format!("CLI {}", n.display_fqn(&file_table));
+            if seen_entry_handlers.insert((idx, label.clone())) {
                 raw_entries.push(RawEntry {
                     handler_idx: idx,
                     kind: EntryPointKind::CliEntrypoint,
@@ -1141,8 +1301,8 @@ where
     raw_entries.sort_by(|a, b| {
         let na = &nodes[a.handler_idx];
         let nb = &nodes[b.handler_idx];
-        (na.file.as_deref(), na.start_line, &a.name).cmp(&(
-            nb.file.as_deref(),
+        (na.file(&file_table), na.start_line, &a.name).cmp(&(
+            nb.file(&file_table),
             nb.start_line,
             &b.name,
         ))
@@ -1150,13 +1310,15 @@ where
 
     let mut evidence_index: BTreeMap<String, EvidenceRecord> = BTreeMap::new();
     let mut entry_points: Vec<EntryPointEvidence> = Vec::with_capacity(raw_entries.len());
+    let mut ep_has_input_validator: Vec<bool> = Vec::with_capacity(raw_entries.len());
     let mut entry_handler_indices: Vec<(usize, usize)> = Vec::with_capacity(raw_entries.len()); // (ep_vec_pos, node_idx)
 
     for (pos, raw) in raw_entries.into_iter().enumerate() {
         let ep_id = format!("EP-{:03}", pos + 1);
         let h = &nodes[raw.handler_idx];
-        let file = h.file.clone().unwrap_or_default();
-        let (auth, validation) = controls_for_handler(raw.handler_idx);
+        let file = h.file(&file_table).unwrap_or_default().to_string();
+        let fqn = h.display_fqn(&file_table).to_string();
+        let (auth, validation, has_input_val) = controls_for_handler(raw.handler_idx);
         let community = community_for_idx(raw.handler_idx);
         evidence_index.insert(
             ep_id.clone(),
@@ -1164,21 +1326,17 @@ where
                 id: ep_id.clone(),
                 provenance: EvidenceProvenance::GraphFact,
                 kind: "entry_point".into(),
-                symbol_or_target: h.display_fqn().to_string(),
+                symbol_or_target: fqn.clone(),
                 file: Some(file.clone()),
                 line: Some(h.start_line),
-                summary: format!(
-                    "Entry point `{}` handled by `{}`",
-                    raw.name,
-                    h.display_fqn()
-                ),
+                summary: format!("Entry point `{}` handled by `{fqn}`", raw.name),
             },
         );
         entry_points.push(EntryPointEvidence {
             id: ep_id,
             kind: raw.kind,
             name: raw.name,
-            handler_symbol: h.display_fqn().to_string(),
+            handler_symbol: fqn,
             http_method: raw.http_method,
             route_path: raw.route_path,
             file,
@@ -1188,6 +1346,7 @@ where
             observed_validation_controls: validation,
             provenance: EvidenceProvenance::GraphFact,
         });
+        ep_has_input_validator.push(has_input_val);
         entry_handler_indices.push((pos, raw.handler_idx));
     }
 
@@ -1196,18 +1355,18 @@ where
     let max_depth = opts.max_depth.max(1);
     struct ReachableTree {
         ep_pos: usize,
-        parents: HashMap<usize, Option<usize>>,
-        depths: HashMap<usize, usize>,
+        parents: FxHashMap<usize, Option<usize>>,
+        depths: FxHashMap<usize, usize>,
         has_audit_log: bool,
     }
     let mut reachable_trees: Vec<ReachableTree> = Vec::with_capacity(entry_handler_indices.len());
-    let mut min_depth_by_node: HashMap<usize, usize> = HashMap::new();
+    let mut min_depth_by_node: FxHashMap<usize, usize> = FxHashMap::default();
     // Callees left unexplored because a BFS frontier hit `max_depth` (surfaced as a limitation).
-    let mut depth_truncated_nodes: HashSet<usize> = HashSet::new();
+    let mut depth_truncated_nodes: FxHashSet<usize> = FxHashSet::default();
 
     for &(ep_pos, start_idx) in &entry_handler_indices {
-        let mut parents: HashMap<usize, Option<usize>> = HashMap::new();
-        let mut depths: HashMap<usize, usize> = HashMap::new();
+        let mut parents: FxHashMap<usize, Option<usize>> = FxHashMap::default();
+        let mut depths: FxHashMap<usize, usize> = FxHashMap::default();
         let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
         parents.insert(start_idx, None);
         depths.insert(start_idx, 0);
@@ -1219,10 +1378,11 @@ where
                 .and_modify(|prev| *prev = (*prev).min(d))
                 .or_insert(d);
             if d >= max_depth {
-                if calls_out[curr]
-                    .iter()
-                    .any(|next| !parents.contains_key(next))
-                {
+                if calls_out[curr].iter().any(|&next| {
+                    !parents.contains_key(&next)
+                        && !nodes[next].is_declaration
+                        && nodes[next].file(&file_table) != Some("<external>")
+                }) {
                     depth_truncated_nodes.insert(curr);
                 }
                 continue;
@@ -1272,7 +1432,7 @@ where
     let mut raw_sinks: Vec<RawSink> = Vec::new();
     // Map `(caller_idx, sink_category, line)` -> index in `raw_sinks` so PDG-verified sinks
     // enrich or add to graph/parked sinks without duplicating the same statement line.
-    let mut sink_slot_by_loc: HashMap<(usize, String, u32), usize> = HashMap::new();
+    let mut sink_slot_by_loc: FxHashMap<(usize, String, u32), usize> = FxHashMap::default();
     let mut node_has_audit_log: Vec<bool> = vec![false; n_count];
     let mut node_has_sanitizer: Vec<bool> = vec![false; n_count];
 
@@ -1282,49 +1442,91 @@ where
     ordered_reachable.sort_by(|&(idx_a, d_a), &(idx_b, d_b)| {
         let na = &nodes[idx_a];
         let nb = &nodes[idx_b];
-        (d_a, na.file.as_deref(), na.start_line, na.display_fqn()).cmp(&(
-            d_b,
-            nb.file.as_deref(),
-            nb.start_line,
-            nb.display_fqn(),
-        ))
+        (
+            d_a,
+            na.file(&file_table),
+            na.start_line,
+            na.display_fqn(&file_table),
+            na.id,
+        )
+            .cmp(&(
+                d_b,
+                nb.file(&file_table),
+                nb.start_line,
+                nb.display_fqn(&file_table),
+                nb.id,
+            ))
     });
 
-    let mut pdg_evaluated_nodes: BTreeSet<usize> = BTreeSet::new();
+    let mut pdg_requests: Vec<FunctionPdgRequest<'_>> = Vec::new();
+    let mut pdg_request_indices: Vec<usize> = Vec::new();
     for (fn_idx, _) in ordered_reachable {
         let n = &nodes[fn_idx];
         if n.node_type != NodeType::Function || n.is_declaration {
             continue;
         }
-        let Some(file) = n.file.as_deref() else {
+        let Some(file) = n.file(&file_table) else {
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
             continue;
         }
-        if pdg_evaluated_nodes.len() >= max_pdg_functions {
+        if pdg_requests.len() >= max_pdg_functions {
             pdg_budget_skipped += 1;
             continue;
         }
-        pdg_evaluated_nodes.insert(fn_idx);
-        let rep = inspect_function_pdg(FunctionPdgRequest {
+        let decl_byte_span = col
+            .node_byte_span(n.id)
+            .ok()
+            .and_then(|(decl, _)| decl)
+            .map(|(s, e)| (s as usize, e as usize));
+        pdg_requests.push(FunctionPdgRequest {
             function_id: n.id,
-            function_fqn: n.display_fqn(),
+            function_fqn: n.display_fqn(&file_table),
             file,
             start_line: n.start_line,
+            decl_byte_span,
         });
+        pdg_request_indices.push(fn_idx);
+    }
+
+    let pdg_reports = if pdg_requests.is_empty() {
+        Vec::new()
+    } else {
+        inspect_functions_pdg(&pdg_requests)
+    };
+
+    let mut pdg_evaluated_nodes: FxHashSet<usize> = FxHashSet::default();
+    for (&fn_idx, rep) in pdg_request_indices.iter().zip(pdg_reports) {
+        // Only mark `fn_idx` as PDG-evaluated when CFG/PDG construction actually succeeded.
+        if rep.evaluated {
+            pdg_evaluated_nodes.insert(fn_idx);
+        }
         if rep.has_sanitizer {
             node_has_sanitizer[fn_idx] = true;
         }
         if rep.has_audit_log {
             node_has_audit_log[fn_idx] = true;
         }
+        let file_str = nodes[fn_idx].file(&file_table).unwrap_or_default();
         for ds in rep.sinks {
+            let short_callee = ds
+                .callee
+                .rsplit(['.', ':', '\\', '/'])
+                .next()
+                .unwrap_or(ds.callee.as_str());
+            let matches_in_repo_def = calls_out[fn_idx].iter().any(|&v| {
+                let cn = &nodes[v];
+                !cn.is_declaration
+                    && cn.file(&file_table) != Some("<external>")
+                    && (cn.display_fqn(&file_table) == ds.callee || cn.name == short_callee)
+            });
             let cat = sink_category_str(ds.sink_kind).to_string();
             let loc_key = (fn_idx, cat, ds.line);
             if let Some(&slot) = sink_slot_by_loc.get(&loc_key) {
                 raw_sinks[slot].pdg_taint = ds.status;
                 raw_sinks[slot].callee = ds.callee;
+                raw_sinks[slot].is_external = !matches_in_repo_def;
             } else {
                 let slot = raw_sinks.len();
                 sink_slot_by_loc.insert(loc_key, slot);
@@ -1332,9 +1534,9 @@ where
                     caller_idx: fn_idx,
                     sink_kind: ds.sink_kind,
                     callee: ds.callee,
-                    file: file.to_string(),
+                    file: file_str.to_string(),
                     line: ds.line,
-                    is_external: true,
+                    is_external: !matches_in_repo_def,
                     pdg_taint: ds.status,
                 });
             }
@@ -1343,18 +1545,18 @@ where
 
     // (function, category) pairs already covered by a PDG-verified sink (exact statement line);
     // graph-only edges add sinks only where the PDG found none. O(1) lookups, not a per-edge scan.
-    let pdg_fn_cats: HashSet<(usize, &'static str)> = raw_sinks
+    let pdg_fn_cats: FxHashSet<(usize, &'static str)> = raw_sinks
         .iter()
         .map(|s| (s.caller_idx, sink_category_str(s.sink_kind)))
         .collect();
-    let mut graph_sink_seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut graph_sink_seen: FxHashSet<(usize, usize)> = FxHashSet::default();
     // Classification depends only on (callee, language): memoize it. Millions of `Calls` edges
     // share a few hundred thousand distinct callees, and each classify call allocates.
-    let mut graph_classify_memo: HashMap<(usize, &'static str), (Option<TaintSink>, bool)> =
-        HashMap::new();
+    let mut graph_classify_memo: FxHashMap<(usize, &'static str), (Option<TaintSink>, bool)> =
+        FxHashMap::default();
     for (u, callees) in calls_out.iter().enumerate() {
         let caller = &nodes[u];
-        let Some(file) = caller.file.as_deref() else {
+        let Some(file) = caller.file(&file_table) else {
             continue;
         };
         if file == "<external>" || is_test_or_fixture_noise_file(file) {
@@ -1363,7 +1565,7 @@ where
         let lang = language_for_file(file);
         for &v in callees {
             let callee_node = &nodes[v];
-            let callee_label = callee_node.display_fqn();
+            let callee_label = callee_node.display_fqn(&file_table);
             let (sink_opt, is_sanitizer) =
                 *graph_classify_memo.entry((v, lang)).or_insert_with(|| {
                     (
@@ -1388,7 +1590,7 @@ where
                         callee: callee_label.to_string(),
                         file: file.to_string(),
                         line: caller.start_line,
-                        is_external: callee_node.file.as_deref() == Some("<external>"),
+                        is_external: callee_node.file(&file_table) == Some("<external>"),
                         pdg_taint: if pdg_evaluated_nodes.contains(&u) {
                             PdgSinkStatus::NoLocalSourceFlow
                         } else {
@@ -1400,8 +1602,6 @@ where
         }
     }
 
-    // Per-file relativization and per-(candidate, language) classification are memoized:
-    // parked call records repeat the same files and callee names many times over.
     // Parked (external) calls: classify in parallel (records are independent; per-worker memos
     // for file relativization and per-(candidate, language) classification), then apply hits
     // sequentially in record order so sink slots and output stay deterministic.
@@ -1412,18 +1612,18 @@ where
         any_sanitizer: bool,
         matched: Option<(TaintSink, String)>,
     }
-    type RelMemo<'a> = HashMap<&'a str, Option<(String, &'static str)>>;
-    type ClassifyMemo = HashMap<(&'static str, String), (Option<TaintSink>, bool)>;
+    type RelMemo<'a> = FxHashMap<&'a str, Option<(String, &'static str)>>;
+    type ClassifyMemo = FxHashMap<(&'static str, String), (Option<TaintSink>, bool)>;
     let parked_hits: Vec<ParkedHit> = opts
         .parked_relations
         .par_iter()
         .map_init(
-            || (RelMemo::new(), ClassifyMemo::new()),
+            || (RelMemo::default(), ClassifyMemo::default()),
             |(rel_memo, cls_memo), rec| -> Option<ParkedHit> {
                 if rec.relation_type != RelationType::Calls {
                     return None;
                 }
-                let &caller_idx = id_to_idx.get(&rec.from_node_id)?;
+                let caller_idx = *id_to_idx.get(&rec.from_node_id)? as usize;
                 let (rel_file, lang) = rel_memo
                     .entry(rec.from_file.as_str())
                     .or_insert_with(|| {
@@ -1521,7 +1721,7 @@ where
     let mut sinks: Vec<SinkEvidence> = Vec::with_capacity(raw_sinks.len());
     for (pos, rs) in raw_sinks.into_iter().enumerate() {
         let sink_id = format!("SNK-{:03}", pos + 1);
-        let caller = &nodes[rs.caller_idx];
+        let caller_fqn = nodes[rs.caller_idx].display_fqn(&file_table);
         let pdg_taint = rs.pdg_taint;
         let provenance = match &pdg_taint {
             PdgSinkStatus::ProvenUnsanitizedFlow { .. } | PdgSinkStatus::SanitizedFlow { .. } => {
@@ -1540,11 +1740,8 @@ where
                 file: Some(rs.file.clone()),
                 line: Some(rs.line),
                 summary: format!(
-                    "Sink `{}` (`{cat}`) invoked in `{}` ({}:{})",
-                    rs.callee,
-                    caller.display_fqn(),
-                    rs.file,
-                    rs.line
+                    "Sink `{}` (`{cat}`) invoked in `{caller_fqn}` ({}:{})",
+                    rs.callee, rs.file, rs.line
                 ),
             },
         );
@@ -1552,7 +1749,7 @@ where
             id: sink_id,
             sink_category: cat,
             callee: rs.callee,
-            caller: caller.display_fqn().to_string(),
+            caller: caller_fqn.to_string(),
             file: rs.file,
             line: rs.line,
             is_external_call: rs.is_external,
@@ -1566,7 +1763,7 @@ where
     // 4. Assets (`UsesConfig` / `ConfigKey`, `Table`, and sensitive domain models touched by reachable code).
     let mut config_consumers: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     for &(u, cfg_idx) in &uses_config_edges {
-        if let Some(f) = nodes[u].file.as_deref()
+        if let Some(f) = nodes[u].file(&file_table)
             && is_test_or_fixture_noise_file(f)
         {
             continue;
@@ -1574,19 +1771,19 @@ where
         config_consumers
             .entry(cfg_idx)
             .or_default()
-            .insert(nodes[u].display_fqn().to_string());
+            .insert(nodes[u].display_fqn(&file_table).to_string());
     }
     for (idx, n) in nodes.iter().enumerate() {
         if n.node_type == NodeType::ConfigKey {
-            if let Some(f) = n.file.as_deref()
+            if let Some(f) = n.file(&file_table)
                 && (is_test_or_fixture_noise_file(f)
-                    || f.ends_with("correctness-manifest.json")
+                    || is_unreferenced_metadata_config_file(f)
                     || n.name.starts_with("files."))
             {
                 continue;
             }
             if matches!(
-                classify_config_asset(&n.name),
+                classify_config_asset(n.name),
                 AssetKind::SecretOrCredentialConfig | AssetKind::ConnectionOrEndpointConfig
             ) {
                 config_consumers.entry(idx).or_default();
@@ -1597,17 +1794,18 @@ where
     let mut assets: Vec<AssetEvidence> = Vec::new();
     for (cfg_idx, consumers) in config_consumers {
         let n = &nodes[cfg_idx];
-        let kind = classify_config_asset(&n.name);
+        let kind = classify_config_asset(n.name);
         let id = format!("AST-{:03}", assets.len() + 1);
         let consumer_list: Vec<String> = consumers.into_iter().collect();
+        let file_opt = n.file(&file_table).map(str::to_string);
         evidence_index.insert(
             id.clone(),
             EvidenceRecord {
                 id: id.clone(),
                 provenance: EvidenceProvenance::GraphFact,
                 kind: "asset".into(),
-                symbol_or_target: n.name.clone(),
-                file: n.file.clone(),
+                symbol_or_target: n.name.to_string(),
+                file: file_opt.clone(),
                 line: (n.start_line > 0).then_some(n.start_line),
                 summary: format!("Configuration asset `{}` ({kind:?})", n.name),
             },
@@ -1615,8 +1813,8 @@ where
         assets.push(AssetEvidence {
             id,
             kind,
-            name: n.name.clone(),
-            file: n.file.clone(),
+            name: n.name.to_string(),
+            file: file_opt,
             line: (n.start_line > 0).then_some(n.start_line),
             consumers: consumer_list,
             provenance: EvidenceProvenance::GraphFact,
@@ -1630,16 +1828,13 @@ where
     }
     let mut domain_consumers: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     for &u in &all_reachable_nodes {
-        for &target_idx in &references_out[u] {
-            let tn = &nodes[target_idx];
-            if tn.node_type == NodeType::Table
-                || (matches!(tn.node_type, NodeType::Class | NodeType::Struct)
-                    && is_sensitive_domain_model_name(&tn.name))
-            {
+        if let Some(targets) = sensitive_refs_out.get(&u) {
+            let caller_fqn = nodes[u].display_fqn(&file_table).to_string();
+            for &target_idx in targets {
                 domain_consumers
                     .entry(target_idx)
                     .or_default()
-                    .insert(nodes[u].display_fqn().to_string());
+                    .insert(caller_fqn.clone());
             }
         }
     }
@@ -1651,23 +1846,25 @@ where
             AssetKind::SensitiveDomainModel
         };
         let id = format!("AST-{:03}", assets.len() + 1);
+        let fqn = n.display_fqn(&file_table).to_string();
+        let file_opt = n.file(&file_table).map(str::to_string);
         evidence_index.insert(
             id.clone(),
             EvidenceRecord {
                 id: id.clone(),
                 provenance: EvidenceProvenance::GraphFact,
                 kind: "asset".into(),
-                symbol_or_target: n.display_fqn().to_string(),
-                file: n.file.clone(),
+                symbol_or_target: fqn.clone(),
+                file: file_opt.clone(),
                 line: (n.start_line > 0).then_some(n.start_line),
-                summary: format!("Data asset `{}` ({kind:?})", n.display_fqn()),
+                summary: format!("Data asset `{fqn}` ({kind:?})"),
             },
         );
         assets.push(AssetEvidence {
             id,
             kind,
-            name: n.display_fqn().to_string(),
-            file: n.file.clone(),
+            name: fqn,
+            file: file_opt,
             line: (n.start_line > 0).then_some(n.start_line),
             consumers: consumers.into_iter().collect(),
             provenance: EvidenceProvenance::GraphFact,
@@ -1697,7 +1894,7 @@ where
 
             let call_path: Vec<String> = chain_indices
                 .iter()
-                .map(|&idx| nodes[idx].display_fqn().to_string())
+                .map(|&idx| nodes[idx].display_fqn(&file_table).to_string())
                 .collect();
             let mut crossed_communities: Vec<String> = Vec::new();
             for &idx in &chain_indices {
@@ -1708,15 +1905,21 @@ where
                 }
             }
             let path_has_sanitizer = chain_indices.iter().any(|&idx| node_has_sanitizer[idx])
-                || !ep.observed_validation_controls.is_empty();
+                || ep_has_input_validator[tree.ep_pos];
 
             for &sp in sink_positions {
                 let sink = &sinks[sp];
                 if sink.sink_category == "log_output" {
                     continue;
                 }
-                let has_san = path_has_sanitizer
-                    || matches!(sink.pdg_taint, PdgSinkStatus::SanitizedFlow { .. });
+                let has_san = match &sink.pdg_taint {
+                    // Intra-procedural PDG proved an unsanitized source->sink flow; never mask with coarse path heuristics.
+                    PdgSinkStatus::ProvenUnsanitizedFlow { .. } => false,
+                    PdgSinkStatus::SanitizedFlow { .. } => true,
+                    PdgSinkStatus::NoLocalSourceFlow | PdgSinkStatus::NotEvaluated => {
+                        path_has_sanitizer
+                    }
+                };
                 let provenance = match &sink.pdg_taint {
                     PdgSinkStatus::ProvenUnsanitizedFlow { .. }
                     | PdgSinkStatus::SanitizedFlow { .. } => EvidenceProvenance::CpgTaint,
@@ -1821,7 +2024,7 @@ where
     // deterministic snapshot order). Only the kept samples are formatted.
     /// (crossing count, first sample `(caller, callee)` node indices).
     type BridgeTally = (usize, Vec<(usize, usize)>);
-    let mut bridge_counts: HashMap<(usize, usize), BridgeTally> = HashMap::new();
+    let mut bridge_counts: FxHashMap<(usize, usize), BridgeTally> = FxHashMap::default();
     for (u, callees) in calls_out.iter().enumerate() {
         let Some(c_from) = node_community[u] else {
             continue;
@@ -1851,11 +2054,13 @@ where
             .entry((label_of(c_from), label_of(c_to)))
             .or_default();
         entry.0 += count;
-        entry.1.extend(
-            samples
-                .into_iter()
-                .map(|(u, v)| format!("{} -> {}", nodes[u].display_fqn(), nodes[v].display_fqn())),
-        );
+        entry.1.extend(samples.into_iter().map(|(u, v)| {
+            format!(
+                "{} -> {}",
+                nodes[u].display_fqn(&file_table),
+                nodes[v].display_fqn(&file_table)
+            )
+        }));
     }
     for ((from_zone, to_zone), (count, mut samples)) in community_bridges {
         let tb_id = format!("TB-{:03}", trust_boundaries.len() + 1);
@@ -1922,74 +2127,96 @@ where
     }
 
     profile_lap(&mut stage_clock, "trust_boundaries");
-    // 6. Reachable OSV Vulnerabilities join.
+    // 6. Reachable OSV Vulnerabilities join (pre-index reachable nodes by `(file, fqn)` / `(file, name)`).
     let mut reachable_vulnerabilities: Vec<ReachableVulnEvidence> = Vec::new();
-    for vr in opts.vuln_results {
-        if !matches!(
-            vr.exploitability,
-            ExploitabilityVerdict::Exploitable | ExploitabilityVerdict::UnderInvestigation
-        ) {
-            continue;
-        }
-        let osv_ref_id = format!("OSV-{:03}", reachable_vulnerabilities.len() + 1);
-        let purl = vr
-            .openvex
-            .statements
-            .first()
-            .and_then(|st| st.products.first())
-            .cloned();
-        let mut sites = Vec::new();
-        let mut reaching_eps = BTreeSet::new();
-        if let Some(st) = &vr.sink_taint {
-            for cs in &st.call_sites {
-                sites.push(format!(
-                    "{} -> {} ({}:{})",
-                    cs.caller, cs.target_method, cs.file, cs.line
-                ));
-                for tree in &reachable_trees {
-                    let ep = &entry_points[tree.ep_pos];
-                    if tree.parents.keys().any(|&idx| {
-                        nodes[idx].display_fqn() == cs.caller || nodes[idx].name == cs.caller
-                    }) {
-                        reaching_eps.insert(ep.id.clone());
-                    }
+    if !opts.vuln_results.is_empty() {
+        let mut reachable_by_file_sym: FxHashMap<(&str, &str), Vec<usize>> = FxHashMap::default();
+        for &idx in &all_reachable_nodes {
+            if let Some(f) = nodes[idx].file(&file_table) {
+                let fqn = nodes[idx].display_fqn(&file_table);
+                reachable_by_file_sym.entry((f, fqn)).or_default().push(idx);
+                if nodes[idx].name != fqn {
+                    reachable_by_file_sym
+                        .entry((f, nodes[idx].name))
+                        .or_default()
+                        .push(idx);
                 }
             }
         }
-        evidence_index.insert(
-            osv_ref_id.clone(),
-            EvidenceRecord {
-                id: osv_ref_id.clone(),
+
+        for vr in opts.vuln_results {
+            if !matches!(
+                vr.exploitability,
+                ExploitabilityVerdict::Exploitable | ExploitabilityVerdict::UnderInvestigation
+            ) {
+                continue;
+            }
+            let osv_ref_id = format!("OSV-{:03}", reachable_vulnerabilities.len() + 1);
+            let purl = vr
+                .openvex
+                .statements
+                .first()
+                .and_then(|st| st.products.first())
+                .cloned();
+            let mut sites = Vec::new();
+            let mut reaching_eps = BTreeSet::new();
+            if let Some(st) = &vr.sink_taint {
+                for cs in &st.call_sites {
+                    sites.push(format!(
+                        "{} -> {} ({}:{})",
+                        cs.caller, cs.target_method, cs.file, cs.line
+                    ));
+                    let rel_cs_file =
+                        relativize_path(opts.repo_root, canon_repo.as_deref(), &cs.file);
+                    if let Some(candidate_indices) =
+                        reachable_by_file_sym.get(&(rel_cs_file.as_str(), cs.caller.as_str()))
+                    {
+                        for tree in &reachable_trees {
+                            if candidate_indices
+                                .iter()
+                                .any(|idx| tree.depths.contains_key(idx))
+                            {
+                                reaching_eps.insert(entry_points[tree.ep_pos].id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            evidence_index.insert(
+                osv_ref_id.clone(),
+                EvidenceRecord {
+                    id: osv_ref_id.clone(),
+                    provenance: EvidenceProvenance::OsvReachability,
+                    kind: "osv_advisory".into(),
+                    symbol_or_target: vr.osv_id.clone(),
+                    file: None,
+                    line: None,
+                    summary: format!(
+                        "Advisory `{}` ({:?}) on {}",
+                        vr.osv_id,
+                        vr.exploitability,
+                        purl.as_deref().unwrap_or("dependency")
+                    ),
+                },
+            );
+            reachable_vulnerabilities.push(ReachableVulnEvidence {
+                id: osv_ref_id,
+                osv_id: vr.osv_id.clone(),
+                purl,
+                exploitability: vr.exploitability,
+                call_sites: sites,
+                reaching_entry_points: reaching_eps.into_iter().collect(),
                 provenance: EvidenceProvenance::OsvReachability,
-                kind: "osv_advisory".into(),
-                symbol_or_target: vr.osv_id.clone(),
-                file: None,
-                line: None,
-                summary: format!(
-                    "Advisory `{}` ({:?}) on {}",
-                    vr.osv_id,
-                    vr.exploitability,
-                    purl.as_deref().unwrap_or("dependency")
-                ),
-            },
-        );
-        reachable_vulnerabilities.push(ReachableVulnEvidence {
-            id: osv_ref_id,
-            osv_id: vr.osv_id.clone(),
-            purl,
-            exploitability: vr.exploitability,
-            call_sites: sites,
-            reaching_entry_points: reaching_eps.into_iter().collect(),
-            provenance: EvidenceProvenance::OsvReachability,
-        });
+            });
+        }
     }
 
     profile_lap(&mut stage_clock, "osv_join");
     // 7. Deterministic STRIDE Threat Candidates (`provenance: GraphRule`, `review_status: NeedsReview`).
     let mut threat_candidates: Vec<ThreatCandidate> = Vec::new();
-    let ep_by_id: HashMap<&str, &EntryPointEvidence> =
+    let ep_by_id: FxHashMap<&str, &EntryPointEvidence> =
         entry_points.iter().map(|ep| (ep.id.as_str(), ep)).collect();
-    let sink_by_id: HashMap<&str, &SinkEvidence> =
+    let sink_by_id: FxHashMap<&str, &SinkEvidence> =
         sinks.iter().map(|s| (s.id.as_str(), s)).collect();
 
     // S — Spoofing: externally exposed HTTP/RPC entry points without observed in-code auth controls.
@@ -2037,12 +2264,17 @@ where
         let Some(&sink) = sink_by_id.get(df.sink_id.as_str()) else {
             continue;
         };
+        // At 0 hops, intra-procedural PDG inspected the entry function itself; if it proved zero
+        // local untrusted source flows to the sink, caller input does not reach that sink.
+        let proven_no_input_at_zero_hops =
+            df.hops == 0 && matches!(df.pdg_taint, PdgSinkStatus::NoLocalSourceFlow);
 
         // T — Tampering: unsanitized flow to SQL / Shell / FileWrite / CodeEval.
         if matches!(
             df.sink_category.as_str(),
             "sql_query" | "shell_command" | "file_write" | "code_eval"
         ) && !df.has_observed_sanitizer
+            && !proven_no_input_at_zero_hops
         {
             let confidence = match df.pdg_taint {
                 PdgSinkStatus::ProvenUnsanitizedFlow { .. } => ConfidenceLevel::High,
@@ -2151,6 +2383,7 @@ where
         // I — Information Disclosure: unescaped HTML render or outbound network sink reachable from entry point.
         if matches!(df.sink_category.as_str(), "html_render" | "network_output")
             && !df.has_observed_sanitizer
+            && !proven_no_input_at_zero_hops
         {
             threat_candidates.push(ThreatCandidate {
                 id: format!("THR-{:03}", threat_candidates.len() + 1),
@@ -2216,6 +2449,10 @@ where
     // I — Information Disclosure on Secret/Credential config assets consumed in application code.
     for asset in &assets {
         if asset.kind == AssetKind::SecretOrCredentialConfig && !asset.consumers.is_empty() {
+            let mut shown: Vec<String> = asset.consumers.iter().take(5).cloned().collect();
+            if asset.consumers.len() > 5 {
+                shown.push(format!("+{} more", asset.consumers.len() - 5));
+            }
             threat_candidates.push(ThreatCandidate {
                 id: format!("THR-{:03}", threat_candidates.len() + 1),
                 stride: StrideCategory::InformationDisclosure,
@@ -2227,7 +2464,7 @@ where
                 description: format!(
                     "Credential/secret key `{}` is consumed by `{}`; accidental logging, error serialization, or insecure storage could disclose secret material.",
                     asset.name,
-                    asset.consumers.join(", ")
+                    shown.join(", ")
                 ),
                 affected_component: asset.consumers[0].clone(),
                 provenance: EvidenceProvenance::GraphRule,
@@ -2781,6 +3018,54 @@ mod tests {
             classify_config_asset("FEATURE_CHECKOUT_V2"),
             AssetKind::RuntimeConfig
         );
+        // Whole-token matching: substring collisions (`IM`+`PORT`, `SEC`+`URI`+`TY`, `G`+`HOST`)
+        // and non-credential token counts (`max_tokens`, `token_len`) stay RuntimeConfig.
+        for runtime_only in [
+            "languages.typescript.import_kinds",
+            "handlers.import_spec_list",
+            "CONFIG_SECURITY_SELINUX",
+            "GHOST_WORKER_COUNT",
+            "llm.max_tokens",
+            "ast.token_len",
+        ] {
+            assert_eq!(
+                classify_config_asset(runtime_only),
+                AssetKind::RuntimeConfig,
+                "{runtime_only} must not match substring secret/endpoint tokens"
+            );
+        }
+        assert_eq!(
+            classify_config_asset("spring.datasource.password"),
+            AssetKind::SecretOrCredentialConfig
+        );
+        assert_eq!(
+            classify_config_asset("spring.datasource.url"),
+            AssetKind::ConnectionOrEndpointConfig
+        );
+    }
+
+    #[test]
+    fn sanitizer_classifier_excludes_numeric_casts_and_domain_quote_methods() {
+        let rules = TaintRuleSet::bundled().expect("bundled taint rules");
+        assert!(!classify_callee_sanitizer(&rules, "python", "int"));
+        assert!(!classify_callee_sanitizer(&rules, "python", "float"));
+        assert!(!classify_callee_sanitizer(
+            &rules,
+            "java",
+            "PricingService.quote"
+        ));
+        assert!(!classify_callee_sanitizer(
+            &rules,
+            "python",
+            "invalidate_cache"
+        ));
+        assert!(classify_callee_sanitizer(&rules, "python", "shlex.quote"));
+        assert!(classify_callee_sanitizer(&rules, "python", "html.escape"));
+        assert!(classify_callee_sanitizer(
+            &rules,
+            "python",
+            "sanitize_input"
+        ));
     }
 
     #[test]

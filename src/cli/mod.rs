@@ -1811,7 +1811,15 @@ impl Cli {
         let quiet_json = matches!(format, OutputFormat::Json | OutputFormat::Sarif) && !verbose;
         let discover_json =
             matches!(self.command, Commands::Discover { .. }) && format == OutputFormat::Json;
-        init_logging(verbose, discover_json);
+        let structured_stdout = self.output.is_none()
+            && matches!(
+                format,
+                OutputFormat::Json
+                    | OutputFormat::Sarif
+                    | OutputFormat::Mermaid
+                    | OutputFormat::Graphviz
+            );
+        init_logging(verbose, discover_json, structured_stdout);
 
         if !long_running && !quiet_json {
             eprintln!("[>] rgctl {command_label}");
@@ -2974,16 +2982,18 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-fn init_logging(verbose: bool, discover_json: bool) {
+fn init_logging(verbose: bool, discover_json: bool, structured_stdout: bool) {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::fmt::format::FmtSpan;
 
-    let use_ansi =
-        !discover_json && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+    let use_ansi = !discover_json
+        && !structured_stdout
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::io::stdout().is_terminal();
 
     if verbose {
-        tracing_subscriber::fmt()
+        let builder = tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| EnvFilter::new("info,rgctl=debug,profile=info")),
@@ -2991,13 +3001,18 @@ fn init_logging(verbose: bool, discover_json: bool) {
             .with_target(true)
             .with_level(true)
             .with_ansi(use_ansi)
-            .with_span_events(FmtSpan::CLOSE)
-            .init();
-    } else if discover_json {
+            .with_span_events(FmtSpan::CLOSE);
+        if structured_stdout {
+            builder.with_writer(std::io::stderr).init();
+        } else {
+            builder.init();
+        }
+    } else if discover_json || structured_stdout {
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error")),
             )
+            .with_writer(std::io::stderr)
             .with_target(false)
             .with_level(false)
             .with_ansi(false)

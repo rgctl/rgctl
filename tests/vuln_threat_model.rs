@@ -656,3 +656,137 @@ public class Jobs {
         "scheduled jobs must not produce Spoofing candidates"
     );
 }
+
+/// Regression: an unrelated `int(...)` cast or `@rate_limit` control inside a handler must never
+/// set `has_observed_sanitizer = true` on a sibling sink with `proven_unsanitized_flow`, and
+/// `RUST_LOG=profile=info` must keep `-f json` stdout pure JSON.
+#[test]
+fn unrelated_numeric_cast_and_ratelimit_never_suppress_proven_unsanitized_taint() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repo.path().join("app.py"),
+        r#"import subprocess
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+def rate_limit():
+    return True
+
+@app.post("/exec")
+def run_diag(request: Request):
+    rate_limit()
+    _limit = int(request.query_params.get("limit"))
+    cmd = request.query_params.get("cmd")
+    subprocess.run(cmd, shell=True)
+"#,
+    )
+    .unwrap();
+    run_discover_plain(repo.path());
+
+    let out = rgctl()
+        .current_dir(repo.path())
+        .env("RUST_LOG", "profile=info")
+        .args(["-f", "json", "vuln", "threat-model", "--offline"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[profile] threat-model"),
+        "profile timings should go to stderr under -f json, got stderr: {stderr}"
+    );
+    let report = stdout_json(out);
+    assert_epistemic_invariants(&report);
+
+    let flows = report["data_flows"].as_array().unwrap();
+    assert_eq!(flows.len(), 1);
+    assert_eq!(flows[0]["pdg_taint"]["status"], "proven_unsanitized_flow");
+    assert_eq!(
+        flows[0]["has_observed_sanitizer"], false,
+        "proven unsanitized PDG flow must never be marked sanitized by unrelated int() or rate_limit()"
+    );
+
+    let candidates = report["threat_candidates"].as_array().unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c["stride"] == "tampering" && c["confidence"] == "high"),
+        "expected High-confidence Tampering candidate on proven unsanitized flow, got: {candidates:?}"
+    );
+    assert!(
+        !candidates
+            .iter()
+            .any(|c| c["stride"] == "denial_of_service"),
+        "rate_limit() should still suppress DenialOfService candidate"
+    );
+}
+
+/// Regression: overloaded Java methods (`query(int)` vs `query(HttpServletRequest)`) share
+/// `(file, display_fqn)` and short name; `Uuid` keying + snapshot `decl_byte_span` must inspect
+/// the vulnerable overload independently and detect `proven_unsanitized_flow` (`High` Tampering).
+#[test]
+fn overloaded_methods_report_proven_unsanitized_flow_without_cache_collision() {
+    let repo = tempfile::tempdir().unwrap();
+    let src = repo.path().join("src/main/java/com/acme");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("OrderController.java"),
+        r#"package com.acme;
+
+import org.springframework.web.bind.annotation.*;
+import javax.servlet.http.HttpServletRequest;
+import java.sql.Statement;
+
+@RestController
+public class OrderController {
+    private Statement stmt;
+
+    public void query(int id) throws Exception {
+        int safe = id + 1;
+    }
+
+    public void query(HttpServletRequest request) throws Exception {
+        String raw = request.getParameter("q");
+        stmt.executeQuery(raw);
+    }
+
+    @GetMapping("/a")
+    public void routeA() throws Exception {
+        query(1);
+    }
+
+    @GetMapping("/b")
+    public void routeB(HttpServletRequest req) throws Exception {
+        query(req);
+    }
+}
+"#,
+    )
+    .unwrap();
+    run_discover_plain(repo.path());
+
+    let out = rgctl()
+        .current_dir(repo.path())
+        .args(["-f", "json", "vuln", "threat-model", "--offline"])
+        .output()
+        .unwrap();
+    let report = stdout_json(out);
+    assert_epistemic_invariants(&report);
+
+    let sinks = report["sinks"].as_array().unwrap();
+    let sql_sink = sinks
+        .iter()
+        .find(|s| s["sink_category"] == "sql_query")
+        .expect("sql_query sink on overloaded query(HttpServletRequest)");
+    assert_eq!(
+        sql_sink["pdg_taint"]["status"], "proven_unsanitized_flow",
+        "overloaded query(HttpServletRequest) must prove unsanitized taint flow: {sql_sink:?}"
+    );
+    let candidates = report["threat_candidates"].as_array().unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c["stride"] == "tampering" && c["confidence"] == "high"),
+        "expected High-confidence Tampering on overloaded SQLi method, got: {candidates:?}"
+    );
+}
