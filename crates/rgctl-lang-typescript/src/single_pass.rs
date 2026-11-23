@@ -164,6 +164,16 @@ pub fn extract_all_single_pass(
     file_path: &Path,
     source: &[u8],
 ) -> Result<ExtractAllResult> {
+    extract_all_single_pass_in_repo(plugin, file_path, None, source)
+}
+
+/// Single iterative DFS with an optional repository-relative `logical_path`.
+pub fn extract_all_single_pass_in_repo(
+    plugin: &TypeScriptPlugin,
+    file_path: &Path,
+    logical_path: Option<&Path>,
+    source: &[u8],
+) -> Result<ExtractAllResult> {
     let tree =
         parse_with_pool("typescript", ts_grammar(), source).map_err(|e| Error::ParseError {
             file: file_path.to_path_buf(),
@@ -546,8 +556,9 @@ pub fn extract_all_single_pass(
     );
 
     let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
-    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file(
+    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file_in_module(
         file_path,
+        logical_path.unwrap_or(file_path),
         &mut result.symbols,
         &mut result.relations,
     );

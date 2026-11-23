@@ -904,6 +904,17 @@ pub trait LanguagePlugin: Send + Sync {
         })
     }
 
+    /// Extract symbols and relations in a single pass with an optional
+    /// repository-relative logical path for module qualification.
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        _logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        self.extract_all(file_path, source)
+    }
+
     /// Calculate complexity metrics for a symbol
     ///
     /// # Arguments

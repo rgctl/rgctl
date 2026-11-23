@@ -6,14 +6,16 @@ inside that function includes its lexical owner. Existing explicit owner names
 and callable identity discriminators are preserved. Python and Go qualification
 remain separate follow-ups under issue #204.
 
-Callables whose short names overlap file-derived and native-owned scopes
-keep their existing unqualified representation, together with their lexical
-descendants. For example, a free `create()`
-in `Foo.ts` must not merge with the native `Foo.create` method. This conservative
-exception is independent of file stem and cache order. Literal callable names
-containing dots also retain their existing representation, so a property such
-as `outer.inner` cannot merge with a nested `inner` function. Fully namespacing native
-members is a separate ownership-policy change.
+Callables whose candidate `qualified_name` (`{owner}.{name}`) directly collides
+with an explicit native-owned `qualified_name` in the same file keep their
+existing unqualified representation, together with their lexical descendants.
+For example, a free `create()` in a root-level `Foo.ts` (`Foo.create`) must not
+merge with the native `Foo.create` method, whereas `src/Foo.ts` qualifies free
+`create()` as `src.Foo.create` without colliding. Literal callable names
+containing dots also retain their existing representation, so a property such as
+`outer.inner` cannot merge with a nested `inner` function. Uncallable anonymous
+callbacks (`anonymous`, `anonymous@L{line}:{col}`) leave `qualified_name` unset
+while disambiguating any nested named declarations via `.L{line}`.
 
 The qualifier runs on extraction workers after the existing tree walk. It does
 not reparse source, read package-manager files, or load repository-wide state.
@@ -41,7 +43,7 @@ policies leave both markers unset.
 
 Identical source reused in another same-stem file or checkout cannot retain the
 first file's logical namespace. Native explicitly qualified names are not
-rebased. Facts-cache format 12 rejects older raw facts; extraction semantics 15
+rebased. Facts-cache format 13 rejects older raw facts; extraction semantics 16
 forces graph regeneration for the changed declaration identities.
 
 Tests cover combined/split API agreement, nested declarations, explicit class

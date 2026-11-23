@@ -474,36 +474,52 @@ fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
         let extractor = Extractor::new(Arc::new(rgctl_languages::default_registry()))
             .with_repo_root("/repo")
             .with_facts_cache(cache.clone());
-        for name in ["Other", "Foo"] {
+        // 1. Nested `src/{Other,Foo}.{js,ts}`: candidate `src.Foo.create` does NOT
+        //    collide with `Native` `Foo.create`, so free `create` and `helper`
+        //    qualify under `src.{name}` while staying distinct from `Foo.create`.
+        for rel_path in [
+            format!("src/Other.{suffix}"),
+            format!("src/Foo.{suffix}"),
+            format!("Foo.{suffix}"),
+        ] {
+            let full_path = Path::new("/repo").join(&rel_path);
             let file = extractor
-                .extract_file_with_source(
-                    &Path::new("/repo").join(format!("src/{name}.{suffix}")),
-                    source.to_vec(),
-                )
+                .extract_file_with_source(&full_path, source.to_vec())
                 .unwrap();
             let fresh = Extractor::new(Arc::new(rgctl_languages::default_registry()))
                 .with_repo_root("/repo")
-                .extract_file_with_source(
-                    &Path::new("/repo").join(format!("src/{name}.{suffix}")),
-                    source.to_vec(),
-                )
+                .extract_file_with_source(&full_path, source.to_vec())
                 .unwrap();
             assert_eq!(
                 file.symbols, fresh.symbols,
-                "cache-dependent declaration names"
+                "cache-dependent declaration names for {rel_path}"
             );
             assert_eq!(
                 file.relations, fresh.relations,
-                "cache-dependent call endpoints"
+                "cache-dependent call endpoints for {rel_path}"
             );
-            assert!(
-                file.symbols
-                    .iter()
-                    .find(|s| s.name == "helper")
-                    .unwrap()
-                    .qualified_name
-                    .is_none()
-            );
+
+            let is_root_collision = rel_path == format!("Foo.{suffix}");
+            let helper_qn = file
+                .symbols
+                .iter()
+                .find(|s| s.name == "helper")
+                .unwrap()
+                .qualified_name
+                .as_deref();
+            if is_root_collision {
+                // Root `Foo.{js,ts}` has module `Foo`, so `Foo.create` collides
+                // with `Native` `Foo.create` — free `create` and `helper` defer.
+                assert!(helper_qn.is_none());
+            } else {
+                let mod_prefix =
+                    rgctl_plugin_helpers::qualified_names::file_module(Path::new(&rel_path));
+                assert_eq!(
+                    helper_qn,
+                    Some(format!("{mod_prefix}.create.helper").as_str())
+                );
+            }
+
             let mut builder = GraphBuilder::new();
             extractor.populate_graph(&[file], &mut builder).unwrap();
             let (nodes, edges) = builder.into_graph();
@@ -514,15 +530,19 @@ fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
             assert_eq!(
                 creates.len(),
                 2,
-                "{}: declaration bodies merged",
+                "{}: declaration bodies merged in {rel_path}",
                 plugin.language_id()
             );
-            let free = creates.iter().find(|n| n.qualified_name.is_none()).unwrap();
             let member = creates
                 .iter()
                 .find(|n| n.qualified_name.as_deref() == Some("Foo.create"))
                 .unwrap();
-            assert_ne!(free.id, member.id);
+            let free = creates.iter().find(|n| n.id != member.id).unwrap();
+            if is_root_collision {
+                assert!(free.qualified_name.is_none());
+            } else {
+                assert!(free.qualified_name.is_some());
+            }
             let caller = nodes.iter().find(|n| n.name.as_str() == "run").unwrap();
             assert!(
                 edges.iter().any(|e| e.edge_type == EdgeType::Calls
@@ -530,6 +550,47 @@ fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
                     && e.to == free.id)
             );
         }
+
+        // 2. Non-colliding class method `Helper.create` in two same-stem files
+        //    (`first/OrderService`, `second/OrderService`) must NOT suppress
+        //    module qualification of top-level `create()`.
+        let multi_src = b"class Helper { create(){return 0;} } function create(){return 1;} function run(){return create();}";
+        let files: Vec<_> = ["first", "second"]
+            .iter()
+            .map(|dir| {
+                extractor
+                    .extract_file_with_source(
+                        &Path::new("/repo")
+                            .join(dir)
+                            .join(format!("OrderService.{suffix}")),
+                        multi_src.to_vec(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let mut builder = GraphBuilder::new();
+        extractor.populate_graph(&files, &mut builder).unwrap();
+        let (nodes, edges) = builder.into_graph();
+        let run_calls: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls)
+            .filter_map(|e| {
+                let from = nodes.iter().find(|n| n.id == e.from)?;
+                let to = nodes.iter().find(|n| n.id == e.to)?;
+                (from.name.as_str() == "run" && to.name.as_str() == "create").then_some((from, to))
+            })
+            .collect();
+        assert_eq!(run_calls.len(), 2);
+        for (from, to) in run_calls {
+            assert_eq!(from.file_path, to.file_path);
+            assert!(
+                to.qualified_name
+                    .as_deref()
+                    .unwrap()
+                    .ends_with(".OrderService.create")
+            );
+        }
+
         for source in [
             &b"class Foo { constructor(){} } const obj = { '<init>': () => 2 };"[..],
             &b"const obj = { 'outer.inner': () => 2 }; function outer(){function inner(){return 1;}}"[..],
@@ -544,8 +605,8 @@ fn native_member_names_do_not_merge_free_functions_or_depend_on_cache_order() {
             let extractor = Extractor::new(Arc::new(rgctl_languages::default_registry()))
                 .with_repo_root("/repo")
                 .with_facts_cache(cache);
-            for name in ["Other", "app"] {
-                let path = Path::new("/repo/src").join(format!("{name}.ts"));
+            for rel in ["src/Other.ts", "src/app.ts", "app.ts"] {
+                let path = Path::new("/repo").join(rel);
                 let cached = extractor
                     .extract_file_with_source(&path, source.to_vec())
                     .unwrap();
