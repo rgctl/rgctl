@@ -107,6 +107,9 @@
       }
     }
   },
+  "dead_code": {
+    "severity": "unsupported"
+  },
   "invariants": {
     "B1_blast_vs_calls": {
       "enabled": true,

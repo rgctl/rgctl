@@ -4,6 +4,33 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+#[path = "procedural_revision_tests.rs"]
+mod revision_tests;
+
+/// Procedural lowering semantics. Bump when unchanged source must be reanalyzed.
+pub const CFG_SEMANTICS_VERSION: u32 = 1;
+
+const fn cfg_revision_tag() -> [u8; 8] {
+    let version = CFG_SEMANTICS_VERSION.to_le_bytes();
+    [
+        b'R', b'G', b'C', b'F', version[0], version[1], version[2], version[3],
+    ]
+}
+
+fn deserialize_cfg_revision<'de, D>(deserializer: D) -> Result<[u8; 8], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let revision = <[u8; 8]>::deserialize(deserializer)?;
+    if revision != cfg_revision_tag() {
+        return Err(serde::de::Error::custom(
+            "incompatible CFG semantics; rebuild procedural analysis with discover --with-cfg",
+        ));
+    }
+    Ok(revision)
+}
+
 /// Dense per-function identifier for a basic block (0..num_blocks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(pub u32);
@@ -121,7 +148,7 @@ impl<'de> Deserialize<'de> for DefVar {
 }
 
 /// A control-flow graph for a single function body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ControlFlowGraph {
     /// Basic blocks keyed by id.
     pub blocks: HashMap<BlockId, BasicBlock>,
@@ -132,13 +159,10 @@ pub struct ControlFlowGraph {
     /// Exit block ids (returns, implicit fall-through exits).
     pub exits: Vec<BlockId>,
     /// Typed locals + formals (name → bare type), populated at CFG build (not persisted).
-    #[serde(skip)]
     pub local_types: HashMap<String, String>,
     /// Successor lists keyed by block id (derived from [`Self::edges`], not serialized).
-    #[serde(skip)]
     succ: HashMap<BlockId, Vec<BlockId>>,
     /// Predecessor lists keyed by block id (derived from [`Self::edges`], not serialized).
-    #[serde(skip)]
     pred: HashMap<BlockId, Vec<BlockId>>,
 }
 
@@ -523,6 +547,30 @@ impl Default for ControlFlowGraph {
     }
 }
 
+impl Serialize for ControlFlowGraph {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Stored<'a> {
+            revision: [u8; 8],
+            blocks: &'a HashMap<BlockId, BasicBlock>,
+            edges: &'a [CfgEdge],
+            entry: BlockId,
+            exits: &'a [BlockId],
+        }
+        Stored {
+            revision: cfg_revision_tag(),
+            blocks: &self.blocks,
+            edges: &self.edges,
+            entry: self.entry,
+            exits: &self.exits,
+        }
+        .serialize(serializer)
+    }
+}
+
 impl<'de> Deserialize<'de> for ControlFlowGraph {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -530,6 +578,8 @@ impl<'de> Deserialize<'de> for ControlFlowGraph {
     {
         #[derive(Deserialize)]
         struct ControlFlowGraphData {
+            #[serde(rename = "revision", deserialize_with = "deserialize_cfg_revision")]
+            _revision: [u8; 8],
             blocks: HashMap<BlockId, BasicBlock>,
             edges: Vec<CfgEdge>,
             entry: BlockId,

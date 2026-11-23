@@ -1,6 +1,6 @@
 # `rgctl` Graph Analysis, CPG & Reachability Architecture
 
-This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v3 `cfg_pdg.archive.bin` archive.
+This document specifies the **macro-level graph analytics and intra-procedural Code Property Graph (CPG) architecture** of `rgctl` (`crates/rgctl-analysis`). It details the three-tier memory model, CSR projection and topology residency, centrality and community detection algorithms, SCC-condensed blast-radius reachability, and the indexed v4 `cfg_pdg.archive.bin` archive.
 
 ---
 
@@ -96,15 +96,19 @@ All constants below are verified directly against [`crates/rgctl-analysis/src/ce
 | `DEFAULT_HYPERBALL_ROUNDS` | `16` (`8` when $V > 500,000$) | `centrality_approx.rs` | Maximum diameter rounds for `HyperBallHarmonic` (`LARGE_GRAPH_HYPERBALL_ROUNDS = 8` above `LARGE_GRAPH_HYPERBALL_NODE_LIMIT = 500_000`). |
 | `HubStripPolicy::MeanPlusFourSigma` | $\mu + 4\sigma$ (`min_degree = 32`) | `community.rs` | Strips omnipresent utility hubs whose total degree exceeds $\max(32, \mu + 4\sigma)$ prior to Fast-Leiden community clustering, then re-attaches them by majority neighbor vote. |
 
-### 3.3 Hybrid CPG Archive v3 Binary Layout (`.rgctl/analysis/cfg_pdg.archive.bin`)
+### 3.3 Hybrid CPG Archive v4 Binary Layout (`.rgctl/analysis/cfg_pdg.archive.bin`)
 
 Implemented in [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs). Supports both whole-repo discovery (`rgctl discover --with-cfg`) and lazy single-function append (`ensure_cfg_pdg_for_source`).
+
+Version 4 retains the indexed footer layout and adds a validated procedural
+semantics revision to each CFG. Older procedural records rebuild from source;
+see [procedural semantics revisions](design/procedural-semantics.md).
 
 #### Header, Payloads, Sorted 32-Byte TOC & 16-Byte EOF Trailer
 
 | Region | Size / Alignment | Fields & Layout | Description |
 | :--- | :--- | :--- | :--- |
-| **Header** | Variable (`8 B + 8 B + digest_len`) | `magic: [u8; 4]` (`b"RBCP"`), `version: u32` (`3`), `digest_len: u64`, `graph_digest: [u8; digest_len]` | Validates archive format (`ARCHIVE_VERSION = 3`) and matches the parent snapshot `content_digest`. |
+| **Header** | Variable (`8 B + 8 B + digest_len`) | `magic: [u8; 4]` (`b"RBCP"`), `version: u32` (`4`), `digest_len: u64`, `graph_digest: [u8; digest_len]` | Validates archive format (`ARCHIVE_VERSION = 4`) and matches the parent snapshot `content_digest`. |
 | **Record Payloads** | Contiguous (`bincode`) | Sequence of serialized [`CfgPdgRecord`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs#L52-L75) (`function_id`, `code_hash`, `function_name`, `file_path`, `Arc<ControlFlowGraph>`, `Arc<ProgramDependenceGraph>`) | Streamed sequentially during `discover --with-cfg` or appended before the new TOC footer by `ensure_cfg_pdg_for_source`. |
 | **Sorted TOC Array** | `toc_count × 32 B` (8-byte aligned) | `key_bytes: [u8; 16]` (UUID bytes, sorted ascending), `offset: u64` (LE), `len: u32` (LE), `flags: u32` (LE: `TOC_FLAG_PRIMARY = 0`, `TOC_FLAG_STABLE_ALIAS = 1`) | [`TocEntry`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs#L126-L157) (`TOC_ENTRY_SIZE = 32`); enables $O(1)$ mmap open and $O(\log F)$ binary search by either graph `NodeId` UUID or `stable_record_uuid(file, name)`. |
 | **EOF Trailer** | `16 B` (`TOC_TRAILER_SIZE`) | `toc_offset: u64` (LE), `toc_count: u32` (LE), `footer_magic: u32` (`0x3354_4F43` = `b"TOC3"`) | Located at `file_len - 16` so `CfgPdgArchiveMmap::open` locates the TOC slice in $O(1)$ without scanning payloads. |
@@ -134,7 +138,7 @@ rgctl inspect <symbol> cfg --prune -f json
 rgctl inspect <symbol> pdg --edge-layer all --def-use -f json
 rgctl inspect <symbol> dom --frontiers -f json
 
-# Program slicing (backward, forward, taint, chop) — lazily populates v3 cfg_pdg.archive.bin
+# Program slicing (backward, forward, taint, chop) — lazily populates v4 cfg_pdg.archive.bin
 rgctl slice <file_or_symbol> --line 42 --variable x -f json
 rgctl slice <file_or_symbol> --line 42 --taint -f json
 
@@ -144,7 +148,7 @@ rgctl cpg calls --function <symbol> -f json
 rgctl cpg mutations --field <field_name> -f json
 rgctl cpg flows --file <path> --line 42 --variable x --direction forward -f json
 
-# Dead-code detection via graph reachability (root-only, zero-cold-touch)
+# Dead-code detection via graph reachability (roots + isolated dead cycles, zero-cold-touch)
 rgctl dead-code -f json
 rgctl dead-code --confidence high,medium --entry-point main -f json
 ```
@@ -159,7 +163,7 @@ rgctl dead-code --confidence high,medium --entry-point main -f json
 | **Fast-Leiden Communities** | [`crates/rgctl-analysis/src/community.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community.rs), [`community_naming.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community_naming.rs) | `CommunityDetector`, `CommunityConfig`, `HubStripPolicy`, `label_communities` |
 | **Blast Radius & SCC DAG** | [`crates/rgctl-analysis/src/blast_radius.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_radius.rs), [`reachability.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/reachability.rs) | `BlastRadiusEngine`, `CondensedDag`, `MacroCallIndex` |
 | **CFG, Dominance & PDG** | [`cfg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg.rs), [`dominance.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs), [`dataflow.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dataflow.rs), [`pdg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs) | `CfgAnalyzer`, `DominanceAnalyzer`, `DataflowAnalyzer`, `PdgBuilder` |
-| **v3 CPG Archive & Lazy Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
+| **v4 CPG Archive & Lazy Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
 | **Slicing & Taint** | [`slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs), [`interprocedural_slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs), [`taint.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/taint.rs) | `BackwardSlicer`, `ForwardSlicer`, `InterproceduralCFG`, `TaintAnalyzer` |
 | **Dead-Code Reachability** | `crates/rgctl-analysis/src/dead_code.rs` (`rgctl dead-code`) | `DeadCodeAnalyzer`, `DeadCodeReport`, `is_framework_annotation` |
 

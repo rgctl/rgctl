@@ -43,7 +43,7 @@ policies leave both markers unset.
 
 Identical source reused in another same-stem file or checkout cannot retain the
 first file's logical namespace. Native explicitly qualified names are not
-rebased. Facts-cache format 13 rejects older raw facts; extraction semantics 16
+rebased. Facts-cache format 14 rejects older raw facts; extraction semantics 16
 forces graph regeneration for the changed declaration identities.
 
 Tests cover combined/split API agreement, nested declarations, explicit class

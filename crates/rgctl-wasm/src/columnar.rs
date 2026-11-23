@@ -6,6 +6,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RBGR";
 const COLUMNAR_VERSION_V2: u32 = 2;
 const COLUMNAR_VERSION_V3: u32 = 3;
+const COLUMNAR_VERSION_V4: u32 = 4;
+/// Mask isolating the `NodeType` id from the packed `NodeRow.node_type`
+/// (v4 packs 1 declaration bit + 2 visibility bits into the high bits;
+/// v2/v3 rows carry zero high bits, so the mask is a no-op there).
+const NODE_TYPE_MASK: u16 = 0x0FFF;
 const HEADER_SIZE: usize = 136;
 const NODE_ROW_SIZE: usize = 64;
 const EDGE_ROW_SIZE: usize = 40;
@@ -130,9 +135,12 @@ impl ColumnarView {
             return Err("invalid graph payload magic (expected RBGR columnar v2)".into());
         }
         let format_version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        if !matches!(format_version, COLUMNAR_VERSION_V2 | COLUMNAR_VERSION_V3) {
+        if !matches!(
+            format_version,
+            COLUMNAR_VERSION_V2 | COLUMNAR_VERSION_V3 | COLUMNAR_VERSION_V4
+        ) {
             return Err(format!(
-                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION_V2} or {COLUMNAR_VERSION_V3})"
+                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION_V2}, {COLUMNAR_VERSION_V3} or {COLUMNAR_VERSION_V4})"
             ));
         }
 
@@ -457,7 +465,8 @@ fn read_node_row(bytes: &[u8], base: usize, idx: usize) -> Result<NodeRow, Strin
     let slice = &bytes[off..off + NODE_ROW_SIZE];
     Ok(NodeRow {
         id: slice[0..16].try_into().unwrap(),
-        node_type: u16::from_le_bytes(slice[16..18].try_into().unwrap()),
+        // Masked: v4 packs declaration/visibility bits into the high bits.
+        node_type: u16::from_le_bytes(slice[16..18].try_into().unwrap()) & NODE_TYPE_MASK,
         name_off: u32::from_le_bytes(slice[20..24].try_into().unwrap()),
         name_len: u32::from_le_bytes(slice[24..28].try_into().unwrap()),
         file_path_off: u32::from_le_bytes(slice[28..32].try_into().unwrap()),
@@ -656,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn columnar_view_accepts_v2_and_v3_headers() {
+    fn columnar_view_accepts_v2_v3_and_v4_headers() {
         fn empty_header(version: u32) -> Vec<u8> {
             let mut buf = vec![0u8; HEADER_SIZE];
             buf[0..4].copy_from_slice(&SNAPSHOT_MAGIC);
@@ -672,6 +681,44 @@ mod tests {
 
         assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V2)).is_ok());
         assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V3)).is_ok());
-        assert!(ColumnarView::open(empty_header(4)).is_err());
+        assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V4)).is_ok());
+        assert!(ColumnarView::open(empty_header(5)).is_err());
+    }
+
+    #[test]
+    fn columnar_view_v4_packed_node_type_bits_are_masked() {
+        // v4 packs 1 declaration bit (0x1000) + 2 visibility bits
+        // (0x4000/0x8000/0xC000) into `NodeRow.node_type`; the WASM reader
+        // must mask them back to the pure `NodeType` id.
+        fn v4_with_function_rows(type_words: &[u16]) -> Vec<u8> {
+            let node_count = type_words.len() as u64;
+            let mut buf = vec![0u8; HEADER_SIZE + type_words.len() * NODE_ROW_SIZE];
+            buf[0..4].copy_from_slice(&SNAPSHOT_MAGIC);
+            buf[4..8].copy_from_slice(&COLUMNAR_VERSION_V4.to_le_bytes());
+            buf[8..12].copy_from_slice(&1u32.to_le_bytes());
+            buf[12..20].copy_from_slice(&node_count.to_le_bytes());
+            let nodes_off = (HEADER_SIZE as u64).to_le_bytes();
+            buf[92..100].copy_from_slice(&nodes_off);
+            buf[100..108].copy_from_slice(&nodes_off);
+            buf[108..116].copy_from_slice(&nodes_off);
+            buf[128..136].copy_from_slice(&nodes_off);
+            for (i, &tw) in type_words.iter().enumerate() {
+                let off = HEADER_SIZE + i * NODE_ROW_SIZE;
+                buf[off + 16..off + 18].copy_from_slice(&tw.to_le_bytes());
+            }
+            buf
+        }
+
+        // Plain function, public function, private function, internal
+        // function, declaration-bit function — all must read as Function.
+        let bytes = v4_with_function_rows(&[0x0000, 0x4000, 0x8000, 0xC000, 0x1000]);
+        let view = ColumnarView::open(bytes.clone()).expect("v4 snapshot opens");
+        let base = u64::from_le_bytes(bytes[92..100].try_into().unwrap()) as usize;
+        for idx in 0..5usize {
+            let row = read_node_row(&bytes, base, idx).expect("row");
+            assert_eq!(row.node_type, 0, "packed bits must mask to Function");
+            assert_eq!(node_type_name(row.node_type), "Function");
+            assert_ne!(node_type_bit(row.node_type), 0, "type bit must be set");
+        }
     }
 }

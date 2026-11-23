@@ -21,6 +21,7 @@ const HANDLED_KINDS: &[(&str, HandlerMask)] = &[
     ("additive_expression", HandlerMask::CFG_STMT),
     ("as_expression", HandlerMask::CFG_STMT),
     ("associatedtype_declaration", HandlerMask::SYMBOL),
+    ("attribute", HandlerMask::RELATION),
     ("await_expression", HandlerMask::CFG_STMT),
     ("call_expression", HandlerMask::RELATION),
     ("catch_block", HandlerMask::CFG_STMT),
@@ -100,6 +101,46 @@ fn class_decl_symbol_type(node: Node) -> (SymbolType, &'static str) {
         }
     }
     (SymbolType::Class, "class")
+}
+
+/// Typed visibility from a Swift declaration's `modifiers > visibility_modifier`
+/// child (`public`/`open` → Public, `private`/`fileprivate` → Private,
+/// `internal` → Internal). Unqualified declarations default to `internal`
+/// (Swift's module-internal default). Zero allocation — text comparison only.
+fn swift_declaration_visibility(node: Node, source: &[u8]) -> rgctl_plugin_api::SymbolVisibility {
+    use rgctl_plugin_api::SymbolVisibility as SV;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut mods_cursor = child.walk();
+        for m in child.children(&mut mods_cursor) {
+            if m.kind() != "visibility_modifier" {
+                continue;
+            }
+            return match m.utf8_text(source).unwrap_or("").trim() {
+                "public" | "open" => SV::Public,
+                "private" | "fileprivate" => SV::Private,
+                _ => SV::Internal,
+            };
+        }
+    }
+    SV::Internal
+}
+
+/// Simple name of a Swift `attribute` node (`@main` → `main`,
+/// `@available(iOS, *)` → `available`), without the leading `@` or any
+/// argument list. Borrowed slice — no allocation (Swift codebases carry
+/// many attributes; only `@main` is ever promoted to a relation).
+fn swift_attribute_name<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let text = node.utf8_text(source).ok()?.trim();
+    let name = text.strip_prefix('@').unwrap_or(text);
+    let end = name
+        .find(|c: char| c == '(' || c.is_whitespace())
+        .unwrap_or(name.len());
+    let name = &name[..end];
+    (!name.is_empty()).then_some(name)
 }
 
 /// Callee name for a `call_expression` — member segment, not the receiver.
@@ -419,6 +460,7 @@ fn push_named_symbol(
         parameters: vec![],
         fields: vec![],
         modifiers: vec![],
+        visibility: swift_declaration_visibility(node, source),
         documentation: None,
         metadata: serde_json::json!({
             "language": "swift",
@@ -590,6 +632,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -639,6 +682,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -693,6 +737,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -731,6 +776,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -770,6 +816,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -814,6 +861,7 @@ pub fn extract_all_single_pass(
                             parameters: vec![],
                             fields: vec![],
                             modifiers: vec![],
+                            visibility: swift_declaration_visibility(node, source),
                             documentation: None,
                             metadata: serde_json::json!({
                                 "language": "swift",
@@ -855,6 +903,7 @@ pub fn extract_all_single_pass(
                                 parameters: vec![],
                                 fields: vec![],
                                 modifiers: vec![],
+                                visibility: swift_declaration_visibility(node, source),
                                 documentation: None,
                                 metadata: serde_json::json!({
                                     "language": "swift",
@@ -864,6 +913,47 @@ pub fn extract_all_single_pass(
                             };
                             record_symbol_spans_from_source(&mut sym, node, source);
                             ctx.symbols.push(sym);
+                        }
+                    }
+                    "attribute" => {
+                        // Swift attributes (`@main`, `@objc`, `@State`, …).
+                        // Only entry-relevant attributes (`@main`, the Swift
+                        // program-entry point) become `AnnotatedWith`
+                        // relations — common property wrappers would add
+                        // graph noise without reachability value. The target
+                        // keeps the `@`-spelled form so it cannot collide
+                        // with a same-file `static func main()` during
+                        // pass-2 name resolution (it resolves to an
+                        // `Annotation` stub instead).
+                        if let Some(name) = swift_attribute_name(node, source) {
+                            if name.eq_ignore_ascii_case("main") {
+                                if let Some(from) = ctx
+                                    .scopes
+                                    .current_function()
+                                    .map(|f| f.qualified_prefix.clone())
+                                    .or_else(|| {
+                                        ctx.scopes
+                                            .current_type()
+                                            .map(|t| t.qualified_prefix.clone())
+                                    })
+                                {
+                                    let spelled = format!("@{name}");
+                                    relations.push(Relation {
+                                        from,
+                                        to: spelled,
+                                        relation_type: RelationType::AnnotatedWith,
+                                        location: node_to_location(node, &file_path_str),
+                                        // `Relation.metadata` is discarded by
+                                        // `SegmentedSpill::append_edge` on
+                                        // spilled discover — keep it `Null`
+                                        // (no per-relation `serde_json::Map`).
+                                        metadata: serde_json::Value::Null,
+                                        to_qualified_hint: Some(format!("@{name}")),
+                                        to_type_hint: Some("annotation".to_string()),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
                         }
                     }
                     "inheritance_specifier" => {

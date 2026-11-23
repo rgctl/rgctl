@@ -168,10 +168,16 @@ impl IncrementalUpdater {
         };
 
         if changes.is_empty() {
-            return Ok(UpdateResult {
-                duration: start.elapsed(),
-                ..Default::default()
-            });
+            let needs_version_upgrade = open_columnar_mmap(&snapshot_path)
+                .map(|base| base.format_version() != rgctl_graph::COLUMNAR_SNAPSHOT_VERSION)
+                .unwrap_or(false);
+            if !needs_version_upgrade {
+                return Ok(UpdateResult {
+                    duration: start.elapsed(),
+                    ..Default::default()
+                });
+            }
+            return self.full_rebuild_to_snapshot(repo_root, &all_files, None, start);
         }
 
         self.apply_changes_to_repo_snapshot(
@@ -549,6 +555,22 @@ impl IncrementalUpdater {
         start: Instant,
     ) -> Result<UpdateResult> {
         let base = open_columnar_mmap(snapshot_path)?;
+        if base.format_version() != rgctl_graph::COLUMNAR_SNAPSHOT_VERSION {
+            drop(base);
+            return match all_files {
+                Some(files) => {
+                    self.full_rebuild_to_snapshot(repo_root, files, Some(&changes), start)
+                }
+                None => {
+                    let discoverer = FileDiscoverer::with_config(
+                        Arc::clone(&self.registry),
+                        self.config.discovery.clone(),
+                    );
+                    let discovered = discoverer.discover(repo_root)?;
+                    self.full_rebuild_to_snapshot(repo_root, &discovered, Some(&changes), start)
+                }
+            };
+        }
         let extract_paths = self.expand_extract_paths_with_col(repo_root, &base, &changes)?;
 
         if let Some(files) = all_files
