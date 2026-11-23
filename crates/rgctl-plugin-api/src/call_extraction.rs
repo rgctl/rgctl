@@ -1,7 +1,8 @@
 //! Shared helpers for extracting `Calls` relations from tree-sitter ASTs.
 
 use crate::{
-    Relation, RelationType, ScopeStack, SourceLocation, Symbol, SymbolType, intern_language_cow,
+    QualifiedNameOrigin, Relation, RelationType, ScopeStack, SourceLocation, Symbol, SymbolType,
+    intern_language_cow,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -547,9 +548,10 @@ fn push_call_relation_from_opt_index(
     };
     let local_target = match unique_only {
         Some(only)
-            if to_type_hint.as_deref().is_none_or(|hint_ty| {
-                same_file_match_compatible_with_hint(only, symbols, hint_ty)
-            }) =>
+            if only.qualified_name_origin == QualifiedNameOrigin::Native
+                && to_type_hint.as_deref().is_none_or(|hint_ty| {
+                    same_file_match_compatible_with_hint(only, symbols, hint_ty)
+                }) =>
         {
             only.qualified_name
                 .clone()
@@ -1090,6 +1092,18 @@ fn python_call_type_hint(
     }
     let method_name = callee_name(func, source)?;
     let object = func.child_by_field_name("object")?;
+    let find_owner_class = |owner: &str| {
+        let leaf = owner.rsplit('.').next().unwrap_or(owner);
+        symbols.iter().find(|s| {
+            s.symbol_type == SymbolType::Class
+                && (s.name == owner
+                    || (s.name == leaf
+                        && (s.location.start_line, s.location.start_column)
+                            <= (from_fn.location.start_line, from_fn.location.start_column)
+                        && (from_fn.location.end_line, from_fn.location.end_column)
+                            <= (s.location.end_line, s.location.end_column)))
+        })
+    };
     let (field_name, owner_class) = match object.kind() {
         "attribute" => {
             let inner_obj = object.child_by_field_name("object")?;
@@ -1105,9 +1119,7 @@ fn python_call_type_hint(
             let field = func.child_by_field_name("attribute")?;
             let field_name = field.utf8_text(source).ok()?.to_string();
             let owner = containing_python_class_name(from_fn)?;
-            if let Some(class_sym) = symbols
-                .iter()
-                .find(|s| s.symbol_type == SymbolType::Class && s.name == owner)
+            if let Some(class_sym) = find_owner_class(&owner)
                 && let Some(ft) = class_sym
                     .fields
                     .iter()
@@ -1121,9 +1133,7 @@ fn python_call_type_hint(
         _ => return None,
     };
     let _ = method_name;
-    let class_sym = symbols
-        .iter()
-        .find(|s| s.symbol_type == SymbolType::Class && s.name == owner_class)?;
+    let class_sym = find_owner_class(&owner_class)?;
     class_sym
         .fields
         .iter()
@@ -1493,6 +1503,9 @@ fn ruby_call_type_hint(
 }
 
 fn containing_python_class_name(from_fn: &Symbol) -> Option<String> {
+    if from_fn.qualified_name_origin != QualifiedNameOrigin::Native {
+        return None;
+    }
     from_fn.qualified_name.as_ref().and_then(|qn| {
         qn.strip_suffix(".<init>")
             .or_else(|| qn.rsplit_once('.').map(|(c, _)| c))

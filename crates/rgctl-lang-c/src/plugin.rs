@@ -90,6 +90,16 @@ impl CPlugin {
             documentation: None,
             metadata: serde_json::Value::Null,
             language: Some(std::borrow::Cow::Borrowed("c")),
+            // `static` storage class (internal linkage) is recorded as the
+            // typed visibility (Private) so consumers classify file-local
+            // functions without re-parsing source or reading properties.
+            // Non-`static` functions have external linkage (Public). Typed
+            // instead of a `modifiers` join: no per-symbol heap `String`.
+            visibility: if has_static_storage_class(node, source) {
+                rgctl_plugin_api::SymbolVisibility::Private
+            } else {
+                rgctl_plugin_api::SymbolVisibility::Public
+            },
             ..Default::default()
         };
         record_symbol_spans(&mut symbol, node, function_name_node(node));
@@ -412,6 +422,34 @@ fn function_name_from_node(node: Node, source: &[u8]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Whether the function definition / prototype carries the `static` storage
+/// class specifier (internal linkage). No allocation — a boolean scan of
+/// specifier children.
+///
+/// tree-sitter-c puts `storage_class_specifier` directly under
+/// `function_definition`, but under `declaration_specifiers` for prototypes
+/// (`declaration` nodes) — both shapes are scanned.
+fn has_static_storage_class(node: Node, source: &[u8]) -> bool {
+    let is_static = |spec: Node| {
+        spec.kind() == "storage_class_specifier" && spec.utf8_text(source) == Ok("static")
+    };
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_static(child) {
+            return true;
+        }
+        if child.kind() == "declaration_specifiers" {
+            let mut spec_cursor = child.walk();
+            for spec in child.children(&mut spec_cursor) {
+                if is_static(spec) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Walk a function/declaration node's declarator chain to its `parameter_list`.
@@ -894,6 +932,55 @@ void dispatch(void (*handler)(void)) {
             .extract_symbols(Path::new("order.h"), source)
             .unwrap();
         assert!(symbols.iter().any(|s| s.name == "checkout"));
+    }
+
+    #[test]
+    fn test_static_storage_class_recorded_as_typed_visibility() {
+        let source = br#"
+static int internal_helper(int x) {
+    return x + 1;
+}
+
+int external_api(int x) {
+    return internal_helper(x);
+}
+
+static int prototyped_static(int x);
+"#;
+        let plugin = CPlugin::new().unwrap();
+        let symbols = plugin
+            .extract_symbols(Path::new("linkage.c"), source)
+            .unwrap();
+        let helper = symbols
+            .iter()
+            .find(|s| s.name == "internal_helper")
+            .expect("internal_helper symbol");
+        assert_eq!(
+            helper.visibility,
+            rgctl_plugin_api::SymbolVisibility::Private,
+            "static storage class must map to Private visibility"
+        );
+        assert!(
+            helper.modifiers.is_empty(),
+            "no per-symbol modifier strings on the C hot path"
+        );
+        let api = symbols
+            .iter()
+            .find(|s| s.name == "external_api")
+            .expect("external_api symbol");
+        assert_eq!(
+            api.visibility,
+            rgctl_plugin_api::SymbolVisibility::Public,
+            "non-static C functions have external linkage (Public)"
+        );
+        let proto = symbols
+            .iter()
+            .find(|s| s.name == "prototyped_static")
+            .expect("static prototype symbol");
+        assert_eq!(
+            proto.visibility,
+            rgctl_plugin_api::SymbolVisibility::Private
+        );
     }
 
     #[test]

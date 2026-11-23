@@ -437,8 +437,13 @@ pub fn ecmascript_function_symbol_name(node: Node<'_>, source: &[u8]) -> Option<
 
     if is_expr {
         return Some(
-            bound_function_expression_name(node, source)
-                .unwrap_or_else(|| format!("anonymous@L{}", node.start_position().row + 1)),
+            bound_function_expression_name(node, source).unwrap_or_else(|| {
+                format!(
+                    "anonymous@L{}:{}",
+                    node.start_position().row + 1,
+                    node.start_position().column + 1
+                )
+            }),
         );
     }
 

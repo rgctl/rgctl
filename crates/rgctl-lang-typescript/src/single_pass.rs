@@ -158,10 +158,59 @@ enum Visit<'a> {
     LeaveGuard,
 }
 
+/// `Public` when the declaration is directly wrapped in an `export_statement`
+/// (`export function …`, `export class …`, `export default …`) or bound via an
+/// exported `const`/`let`/`var` declaration (`export const f = () => …`,
+/// `export const f = function() {}`) — no allocation, parent hops only.
+fn exported_visibility(node: Node) -> rgctl_plugin_api::SymbolVisibility {
+    let mut current = node;
+    for _ in 0..8 {
+        let Some(parent) = current.parent() else {
+            return rgctl_plugin_api::SymbolVisibility::Unknown;
+        };
+        match parent.kind() {
+            "export_statement" => return rgctl_plugin_api::SymbolVisibility::Public,
+            "variable_declarator" => {
+                let is_exported = parent
+                    .parent()
+                    .filter(|decl| {
+                        matches!(decl.kind(), "lexical_declaration" | "variable_declaration")
+                    })
+                    .and_then(|decl| decl.parent())
+                    .is_some_and(|gp| gp.kind() == "export_statement");
+                return if is_exported {
+                    rgctl_plugin_api::SymbolVisibility::Public
+                } else {
+                    rgctl_plugin_api::SymbolVisibility::Unknown
+                };
+            }
+            "parenthesized_expression"
+            | "as_expression"
+            | "type_assertion"
+            | "satisfies_expression"
+            | "non_null_expression" => {
+                current = parent;
+            }
+            _ => return rgctl_plugin_api::SymbolVisibility::Unknown,
+        }
+    }
+    rgctl_plugin_api::SymbolVisibility::Unknown
+}
+
 /// Single iterative DFS: symbols + deferred calls + heritage/decorators/new + complexity.
 pub fn extract_all_single_pass(
     plugin: &TypeScriptPlugin,
     file_path: &Path,
+    source: &[u8],
+) -> Result<ExtractAllResult> {
+    extract_all_single_pass_in_repo(plugin, file_path, None, source)
+}
+
+/// Single iterative DFS with an optional repository-relative `logical_path`.
+pub fn extract_all_single_pass_in_repo(
+    plugin: &TypeScriptPlugin,
+    file_path: &Path,
+    logical_path: Option<&Path>,
     source: &[u8],
 ) -> Result<ExtractAllResult> {
     let tree =
@@ -209,7 +258,8 @@ pub fn extract_all_single_pass(
                 let mut pushed_scope = false;
 
                 if is_ecmascript_function_node(node) {
-                    let sym = plugin.extract_function(node, source, &file_path_str)?;
+                    let mut sym = plugin.extract_function(node, source, &file_path_str)?;
+                    sym.visibility = exported_visibility(node);
                     let params = sym.parameters.len() as u32;
                     let loc =
                         ((node.end_position().row - node.start_position().row) + 1).max(1) as u32;
@@ -249,7 +299,8 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "class_declaration" | "abstract_class_declaration" => {
-                        let sym = plugin.extract_class(node, source, &file_path_str)?;
+                        let mut sym = plugin.extract_class(node, source, &file_path_str)?;
+                        sym.visibility = exported_visibility(node);
                         let name = sym.name.clone();
                         ctx.symbols.push(sym);
                         ctx.enter_scope(
@@ -287,7 +338,8 @@ pub fn extract_all_single_pass(
                         plugin.emit_decorators_for_node(node, source, file_path, &mut relations);
                     }
                     "interface_declaration" => {
-                        let iface = plugin.extract_interface(node, source, &file_path_str)?;
+                        let mut iface = plugin.extract_interface(node, source, &file_path_str)?;
+                        iface.visibility = exported_visibility(node);
                         let iface_name = iface.name.clone();
                         ctx.symbols.push(iface);
                         ctx.enter_scope(
@@ -332,7 +384,8 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "enum_declaration" => {
-                        let sym = plugin.extract_enum(node, source, &file_path_str)?;
+                        let mut sym = plugin.extract_enum(node, source, &file_path_str)?;
+                        sym.visibility = exported_visibility(node);
                         let name = sym.name.clone();
                         ctx.symbols.push(sym);
                         ctx.enter_scope(
@@ -346,11 +399,9 @@ pub fn extract_all_single_pass(
                         pushed_scope = true;
                     }
                     "type_alias_declaration" => {
-                        ctx.symbols.push(plugin.extract_type_alias(
-                            node,
-                            source,
-                            &file_path_str,
-                        )?);
+                        let mut alias = plugin.extract_type_alias(node, source, &file_path_str)?;
+                        alias.visibility = exported_visibility(node);
+                        ctx.symbols.push(alias);
                     }
                     "import_statement" => {
                         ctx.symbols.extend(extract_import_symbols(
@@ -546,8 +597,9 @@ pub fn extract_all_single_pass(
     );
 
     let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
-    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file(
+    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_file_in_module(
         file_path,
+        logical_path.unwrap_or(file_path),
         &mut result.symbols,
         &mut result.relations,
     );

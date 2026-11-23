@@ -429,6 +429,14 @@ pub fn extract_all_single_pass(
                                         "language": "elixir",
                                         "kind": head,
                                     }),
+                                    // `def`/`defmacro` are public; `defp`/`defmacrop`
+                                    // are module-private — typed so dead-code
+                                    // confidence never reads cold properties.
+                                    visibility: if matches!(head, "def" | "defmacro") {
+                                        rgctl_plugin_api::SymbolVisibility::Public
+                                    } else {
+                                        rgctl_plugin_api::SymbolVisibility::Private
+                                    },
                                     ..Default::default()
                                 };
                                 record_symbol_spans_from_source(&mut sym, node, source);

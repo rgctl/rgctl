@@ -40,7 +40,7 @@
       {
         "edge": "calls",
         "from": "src.module_qualification.Foo.collisionCaller",
-        "to": "create",
+        "to": "src.module_qualification.Foo.create",
         "severity": "required"
       }
     ],
@@ -717,9 +717,10 @@
       "unique": true,
       "identity": {
         "exact_name": "create",
-        "canonical_fqn": "create",
+        "canonical_fqn": "Foo::create",
         "file_suffix": "src/module_qualification/Foo.ts",
-        "language": "typescript"
+        "language": "typescript",
+        "qualified_name": "src.module_qualification.Foo.create"
       },
       "exact_callees": [
         "collisionInner"
@@ -778,9 +779,10 @@
       "unique": true,
       "identity": {
         "exact_name": "collisionInner",
-        "canonical_fqn": "collisionInner",
+        "canonical_fqn": "create::collisionInner",
         "file_suffix": "src/module_qualification/Foo.ts",
-        "language": "typescript"
+        "language": "typescript",
+        "qualified_name": "src.module_qualification.Foo.create.collisionInner"
       },
       "exact_callees": [],
       "exact_callers": [
@@ -820,7 +822,7 @@
       {
         "name": "correctnessRoot",
         "kind": "unreferenced_function",
-        "confidence": "high",
+        "confidence": "low",
         "file": "correctness.ts"
       }
     ],

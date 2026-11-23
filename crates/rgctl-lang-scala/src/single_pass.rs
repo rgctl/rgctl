@@ -728,6 +728,17 @@ pub fn extract_all_single_pass(
                                 }
                             }
                             if let Some(ann) = ann {
+                                // Scala 3 `@main def runTool()` must resolve to an
+                                // `Annotation` node, never a same-repo `def main(...)`
+                                // function — pass-2 name resolution prefers
+                                // implementations, so the `@`-spelled target plus an
+                                // annotation type hint keeps them disjoint (mirrors
+                                // the Swift `@main` handling).
+                                let (target, type_hint) = if ann.eq_ignore_ascii_case("main") {
+                                    (format!("@{ann}"), Some("annotation".to_string()))
+                                } else {
+                                    (ann.clone(), None)
+                                };
                                 let mut metadata = serde_json::json!({
                                     "language": "scala",
                                     "kind": "annotation",
@@ -737,12 +748,12 @@ pub fn extract_all_single_pass(
                                 }
                                 relations.push(Relation {
                                     from,
-                                    to: ann.clone(),
+                                    to: target.clone(),
                                     relation_type: RelationType::AnnotatedWith,
                                     location: node_to_location(node, &file_path_str),
                                     metadata,
-                                    to_qualified_hint: Some(ann),
-                                    to_type_hint: None,
+                                    to_qualified_hint: Some(target),
+                                    to_type_hint: type_hint,
                                     ..Default::default()
                                 });
                             }
