@@ -246,7 +246,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> CallBindings<'a, C> {
     ///
     /// This does not assert that `target.callee` was selected by extraction or
     /// that a structural callable edge establishes this particular call site.
-    pub fn bind(&mut self, target: InvocationTarget) -> Result<CallBinding> {
+    pub fn bind_invocation(&mut self, target: InvocationTarget) -> Result<CallBinding> {
         if let Some(&binding) = self.bindings.get(&target) {
             return Ok(binding);
         }
@@ -295,10 +295,10 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> CallBindings<'a, C> {
                     limit: self.limits.max_transfers_per_call,
                     limited: false,
                 };
-                binder.arguments()?;
-                binder.returns(callee)?;
+                binder.bind_actuals()?;
+                binder.bind_return_values(callee)?;
                 if binder.limited {
-                    binder.warn(BindingDiagnostic::LimitReached);
+                    binder.record_binding_diagnostic(BindingDiagnostic::LimitReached);
                 }
             }
         }
@@ -343,13 +343,13 @@ struct Binder<'a> {
 }
 
 impl Binder<'_> {
-    fn warn(&mut self, diagnostic: BindingDiagnostic) {
+    fn record_binding_diagnostic(&mut self, diagnostic: BindingDiagnostic) {
         if !self.diagnostics[self.diagnostic_start..].contains(&diagnostic) {
             self.diagnostics.push(diagnostic);
         }
     }
 
-    fn push(&mut self, transfer: ValueTransfer) {
+    fn append_binding_transfer(&mut self, transfer: ValueTransfer) {
         if self.transfers.len() - self.start >= self.limit {
             self.limited = true;
             return;
@@ -359,14 +359,14 @@ impl Binder<'_> {
 
     fn emit(&mut self, source: BindingSource, formal: usize, kind: TransferKind) {
         let Some(f) = self.callee.formals.get(formal) else {
-            self.warn(BindingDiagnostic::InvalidOperand);
+            self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
             return;
         };
         if self.callee.expressions.get(f.value.0 as usize).is_none() {
-            self.warn(BindingDiagnostic::InvalidOperand);
+            self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
             return;
         }
-        self.push(ValueTransfer {
+        self.append_binding_transfer(ValueTransfer {
             from: source,
             to: ValueRef {
                 function: self.target.callee,
@@ -388,7 +388,7 @@ impl Binder<'_> {
         let f = &self.callee.formals[formal];
         if let Some(value) = f.default_value {
             if self.callee.expressions.get(value.0 as usize).is_none() {
-                self.warn(BindingDiagnostic::InvalidOperand);
+                self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
                 return;
             }
             let evaluation = if self.callee.language == OperandLanguage::Python {
@@ -410,9 +410,9 @@ impl Binder<'_> {
         }
     }
 
-    fn arguments(&mut self) -> Result<()> {
+    fn bind_actuals(&mut self) -> Result<()> {
         let Some(arguments) = self.call.arguments.slice(&self.caller.arguments) else {
-            self.warn(BindingDiagnostic::InvalidOperand);
+            self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
             return Ok(());
         };
         let mut assigned = vec![false; self.callee.formals.len()];
@@ -435,7 +435,7 @@ impl Binder<'_> {
             if matches!(
                 formal.kind,
                 FormalKind::Positional(_) | FormalKind::KeywordOnly
-            ) && let Some(name) = self.callee.name(formal.name)
+            ) && let Some(name) = self.callee.operand_name(formal.name)
             {
                 keywords.insert(name, index);
                 keyword_order.push(index);
@@ -478,7 +478,7 @@ impl Binder<'_> {
                 ReceiverSupply::Constructed => self.actual(self.call.result),
             };
             if self.callee.receiver_convention == ReceiverConvention::PythonClassDescriptor {
-                self.warn(BindingDiagnostic::ClassReceiver);
+                self.record_binding_diagnostic(BindingDiagnostic::ClassReceiver);
                 self.emit(
                     BindingSource::Implicit(ImplicitValue::Unknown),
                     formal,
@@ -487,11 +487,11 @@ impl Binder<'_> {
             } else if let Some(source) = source {
                 self.emit(source, formal, kind);
             } else {
-                self.warn(BindingDiagnostic::ReceiverConvention);
+                self.record_binding_diagnostic(BindingDiagnostic::ReceiverConvention);
             }
             assigned[formal] = true;
         } else if self.target.receiver != ReceiverSupply::None {
-            self.warn(BindingDiagnostic::ReceiverConvention);
+            self.record_binding_diagnostic(BindingDiagnostic::ReceiverConvention);
         }
         let mut cursor = 0usize;
         let mut rest_index = u32::from(receiver_in_rest);
@@ -509,7 +509,7 @@ impl Binder<'_> {
                 continue;
             }
             let Some(source) = self.actual(argument.value) else {
-                self.warn(BindingDiagnostic::InvalidOperand);
+                self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
                 continue;
             };
             match argument.kind {
@@ -532,7 +532,7 @@ impl Binder<'_> {
                 ArgumentKind::Positional => {
                     if let Some(&(_, formal)) = positional.get(cursor) {
                         if assigned[formal] {
-                            self.warn(BindingDiagnostic::DuplicateArgument);
+                            self.record_binding_diagnostic(BindingDiagnostic::DuplicateArgument);
                         }
                         self.emit(source, formal, TransferKind::ActualToFormal);
                         assigned[formal] = true;
@@ -551,19 +551,19 @@ impl Binder<'_> {
                         rest_index += 1;
                         assigned[formal] = true;
                     } else if !ecma(self.callee.language) {
-                        self.warn(BindingDiagnostic::ExtraArgument);
+                        self.record_binding_diagnostic(BindingDiagnostic::ExtraArgument);
                     } else {
-                        self.warn(BindingDiagnostic::UnsupportedConvention);
+                        self.record_binding_diagnostic(BindingDiagnostic::UnsupportedConvention);
                     }
                 }
                 ArgumentKind::Named(name_id) => {
                     if self.callee.language != OperandLanguage::Python {
-                        self.warn(BindingDiagnostic::UnsupportedConvention);
+                        self.record_binding_diagnostic(BindingDiagnostic::UnsupportedConvention);
                     }
-                    let name = self.caller.name(name_id);
+                    let name = self.caller.operand_name(name_id);
                     if let Some(&formal) = name.and_then(|name| keywords.get(name)) {
                         if assigned[formal] {
-                            self.warn(BindingDiagnostic::DuplicateArgument);
+                            self.record_binding_diagnostic(BindingDiagnostic::DuplicateArgument);
                         }
                         self.emit(source, formal, TransferKind::ActualToFormal);
                         assigned[formal] = true;
@@ -575,11 +575,11 @@ impl Binder<'_> {
                         );
                         assigned[formal] = true;
                     } else {
-                        self.warn(BindingDiagnostic::UnexpectedKeyword);
+                        self.record_binding_diagnostic(BindingDiagnostic::UnexpectedKeyword);
                     }
                 }
                 ArgumentKind::SpreadPositional => {
-                    self.warn(BindingDiagnostic::PositionalSpread);
+                    self.record_binding_diagnostic(BindingDiagnostic::PositionalSpread);
                     for &(_, formal) in &positional[cursor..] {
                         if self.limited {
                             break;
@@ -592,7 +592,7 @@ impl Binder<'_> {
                     uncertain_positions = true;
                 }
                 ArgumentKind::SpreadKeywords => {
-                    self.warn(BindingDiagnostic::KeywordSpread);
+                    self.record_binding_diagnostic(BindingDiagnostic::KeywordSpread);
                     for &formal in &keyword_order {
                         if self.limited {
                             break;
@@ -647,13 +647,13 @@ impl Binder<'_> {
                     TransferKind::ImplicitToFormal,
                 );
             } else if !maybe_supplied {
-                self.warn(BindingDiagnostic::MissingArgument);
+                self.record_binding_diagnostic(BindingDiagnostic::MissingArgument);
             }
         }
         Ok(())
     }
 
-    fn returns(&mut self, cfg: &ControlFlowGraph) -> Result<()> {
+    fn bind_return_values(&mut self, cfg: &ControlFlowGraph) -> Result<()> {
         if self.limited || self.target.receiver == ReceiverSupply::Constructed {
             return Ok(());
         }
@@ -663,7 +663,7 @@ impl Binder<'_> {
             .get(self.call.result.0 as usize)
             .is_none()
         {
-            self.warn(BindingDiagnostic::InvalidOperand);
+            self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
             return Ok(());
         }
         let to = ValueRef {
@@ -672,7 +672,7 @@ impl Binder<'_> {
         };
         for returned in &self.callee.returns {
             let Some(values) = returned.values.slice(&self.callee.inputs) else {
-                self.warn(BindingDiagnostic::InvalidOperand);
+                self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
                 continue;
             };
             if values.is_empty() {
@@ -691,7 +691,7 @@ impl Binder<'_> {
                     _ => None,
                 };
                 if let Some(value) = value {
-                    self.push(ValueTransfer {
+                    self.append_binding_transfer(ValueTransfer {
                         from: BindingSource::Implicit(value),
                         to,
                         kind: TransferKind::ReturnToResult { position: 0 },
@@ -703,10 +703,10 @@ impl Binder<'_> {
                     return Ok(());
                 }
                 if self.callee.expressions.get(expression.0 as usize).is_none() {
-                    self.warn(BindingDiagnostic::InvalidOperand);
+                    self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
                     continue;
                 }
-                self.push(ValueTransfer {
+                self.append_binding_transfer(ValueTransfer {
                     from: BindingSource::Expression(ValueRef {
                         function: self.target.callee,
                         expression,
@@ -729,11 +729,11 @@ impl Binder<'_> {
                 OperandLanguage::Python => ImplicitValue::None,
                 language if ecma(language) => ImplicitValue::Undefined,
                 _ => {
-                    self.warn(BindingDiagnostic::UnsupportedConvention);
+                    self.record_binding_diagnostic(BindingDiagnostic::UnsupportedConvention);
                     ImplicitValue::Unknown
                 }
             };
-            self.push(ValueTransfer {
+            self.append_binding_transfer(ValueTransfer {
                 from: BindingSource::Implicit(value),
                 to,
                 kind: TransferKind::FallthroughToResult,

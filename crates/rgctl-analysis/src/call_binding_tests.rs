@@ -62,7 +62,9 @@ impl Fixture {
         let ExpressionKind::Formal(id) = facts.expressions[value.expression.0 as usize].kind else {
             panic!("not a formal target");
         };
-        facts.name(facts.formals[id.0 as usize].name).unwrap()
+        facts
+            .operand_name(facts.formals[id.0 as usize].name)
+            .unwrap()
     }
 
     fn value_name(&self, source: BindingSource) -> &str {
@@ -73,7 +75,7 @@ impl Fixture {
         let ExpressionKind::Name(name) = facts.expressions[value.expression.0 as usize].kind else {
             panic!("not a name occurrence");
         };
-        facts.name(name).unwrap()
+        facts.operand_name(name).unwrap()
     }
 }
 
@@ -113,7 +115,9 @@ fn actual_and_return_edges_are_native_and_position_specific_in_six_languages() {
     ] {
         let f = Fixture::new(language, caller, callee);
         let mut query = CallBindings::new(&f.icfg);
-        let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+        let binding = query
+            .bind_invocation(f.target(0, ReceiverSupply::None))
+            .unwrap();
         assert!(
             binding
                 .diagnostics
@@ -187,7 +191,9 @@ fn bound_receivers_do_not_shift_ordinary_actuals_in_six_languages() {
     ] {
         let f = Fixture::new(language, caller, callee);
         let mut query = CallBindings::new(&f.icfg);
-        let binding = query.bind(f.target(0, ReceiverSupply::Member)).unwrap();
+        let binding = query
+            .bind_invocation(f.target(0, ReceiverSupply::Member))
+            .unwrap();
         assert!(
             binding
                 .diagnostics
@@ -223,7 +229,9 @@ fn unbound_python_method_and_go_method_expression_keep_explicit_receivers() {
         "class Demo:\n def consume(self,value):\n  return value\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     let actuals: Vec<_> = binding
         .transfers
         .slice(&query.transfers)
@@ -241,7 +249,7 @@ fn unbound_python_method_and_go_method_expression_keep_explicit_receivers() {
     );
     let mut query = CallBindings::new(&f.icfg);
     let binding = query
-        .bind(f.target(0, ReceiverSupply::FirstArgument))
+        .bind_invocation(f.target(0, ReceiverSupply::FirstArgument))
         .unwrap();
     assert!(
         binding
@@ -277,7 +285,9 @@ fn python_named_defaults_and_positional_only_keyword_rest_are_distinct() {
         "def consume(first,second):\n return second\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     let actuals: Vec<_> = binding
         .transfers
         .slice(&query.transfers)
@@ -294,7 +304,9 @@ fn python_named_defaults_and_positional_only_keyword_rest_are_distinct() {
         "def consume(first,/,second=1,**rest):\n return first\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -330,7 +342,9 @@ fn unknown_ecma_actual_retains_the_default_undefined_alternative() {
             "function consume(value=new X()){return value;}",
         );
         let mut query = CallBindings::new(&f.icfg);
-        let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+        let binding = query
+            .bind_invocation(f.target(0, ReceiverSupply::None))
+            .unwrap();
         let default = binding
             .transfers
             .slice(&query.transfers)
@@ -362,7 +376,9 @@ fn unknown_spreads_retain_candidate_formals_and_report_uncertainty() {
             "def consume(first,second=1,**rest):\n return first\n",
         );
         let mut query = CallBindings::new(&f.icfg);
-        let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+        let binding = query
+            .bind_invocation(f.target(0, ReceiverSupply::None))
+            .unwrap();
         let diagnostics = binding.diagnostics.slice(&query.diagnostics).unwrap();
         assert!(diagnostics.contains(&expected_diagnostic));
         assert!(
@@ -394,7 +410,9 @@ fn rest_elements_are_membership_edges_not_whole_object_aliases() {
         "function consume(...values){return values;}",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     let edges = binding.transfers.slice(&query.transfers).unwrap();
     assert!(
         edges.iter().any(
@@ -417,7 +435,9 @@ fn return_slots_and_repeated_call_results_keep_their_invocation_context() {
         "package demo\nfunc consume(first X,second X)(X,X){return first,second}",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     let slots: Vec<_> = binding
         .transfers
         .slice(&query.transfers)
@@ -436,8 +456,12 @@ fn return_slots_and_repeated_call_results_keep_their_invocation_context() {
         "function consume(value){return value;}",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let first = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
-    let second = query.bind(f.target(1, ReceiverSupply::None)).unwrap();
+    let first = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
+    let second = query
+        .bind_invocation(f.target(1, ReceiverSupply::None))
+        .unwrap();
     for (binding, expected) in [(first, "a"), (second, "b")] {
         let edges = binding.transfers.slice(&query.transfers).unwrap();
         assert!(edges.iter().any(|e|e.kind==TransferKind::ActualToFormal && f.value_name(e.from)==expected));
@@ -463,7 +487,7 @@ fn constructor_result_supplies_this_without_void_return_overwriting_it() {
     );
     let mut query = CallBindings::new(&f.icfg);
     let binding = query
-        .bind(f.target(0, ReceiverSupply::Constructed))
+        .bind_invocation(f.target(0, ReceiverSupply::Constructed))
         .unwrap();
     assert!(
         binding
@@ -509,7 +533,9 @@ fn bare_and_fallthrough_returns_produce_language_defined_values() {
     ] {
         let f = Fixture::new(language, caller, callee);
         let mut query = CallBindings::new(&f.icfg);
-        let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+        let binding = query
+            .bind_invocation(f.target(0, ReceiverSupply::None))
+            .unwrap();
         assert!(
             binding
                 .transfers
@@ -531,7 +557,9 @@ fn unsupported_formals_never_narrow_all_actuals_to_a_wrong_position() {
         "function consume({ignored},value){return value;}",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -557,7 +585,9 @@ fn missing_source_arity_errors_and_limits_cannot_be_successful_empty_mappings() 
         "def consume(first,second):\n return second\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -567,12 +597,12 @@ fn missing_source_arity_errors_and_limits_cannot_be_successful_empty_mappings() 
     );
     assert!(
         query
-            .bind(f.target(u32::MAX, ReceiverSupply::None))
+            .bind_invocation(f.target(u32::MAX, ReceiverSupply::None))
             .is_err()
     );
     let mut missing = f.target(0, ReceiverSupply::None);
     missing.callee = Uuid::new_v4();
-    let binding = query.bind(missing).unwrap();
+    let binding = query.bind_invocation(missing).unwrap();
     assert!(
         binding
             .diagnostics
@@ -586,7 +616,9 @@ fn missing_source_arity_errors_and_limits_cannot_be_successful_empty_mappings() 
             max_transfers_per_call: 1,
         },
     );
-    let binding = limited.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = limited
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(binding.transfers.len <= 1);
     assert!(
         binding
@@ -628,7 +660,10 @@ fn archive_view_produces_the_same_transfer_mapping_without_source_access() {
     let mut fresh = f.icfg.call_bindings();
     let mut cached = view.call_bindings();
     let target = f.target(0, ReceiverSupply::None);
-    assert_eq!(fresh.bind(target).unwrap(), cached.bind(target).unwrap());
+    assert_eq!(
+        fresh.bind_invocation(target).unwrap(),
+        cached.bind_invocation(target).unwrap()
+    );
     assert_eq!(fresh.transfers, cached.transfers);
     assert_eq!(fresh.diagnostics, cached.diagnostics);
 }
@@ -641,7 +676,9 @@ fn duplicate_keywords_class_receiver_and_invalid_operands_remain_diagnosed() {
         "def consume(first):\n return first\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -656,7 +693,9 @@ fn duplicate_keywords_class_receiver_and_invalid_operands_remain_diagnosed() {
         "class Demo:\n @classmethod\n def consume(cls,value):\n  return value\n",
     );
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::Member)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::Member))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -687,7 +726,9 @@ fn duplicate_keywords_class_receiver_and_invalid_operands_remain_diagnosed() {
         .arguments
         .start = u32::MAX;
     let mut query = CallBindings::new(&f.icfg);
-    let binding = query.bind(f.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::None))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -705,7 +746,9 @@ fn bound_python_receiver_is_the_first_element_of_a_rest_only_signature() {
         "class Demo:\n def consume(*values):\n  return values\n",
     );
     let mut query = f.icfg.call_bindings();
-    let binding = query.bind(f.target(0, ReceiverSupply::Member)).unwrap();
+    let binding = query
+        .bind_invocation(f.target(0, ReceiverSupply::Member))
+        .unwrap();
     assert!(
         binding
             .diagnostics
@@ -736,12 +779,12 @@ fn repeated_binding_requests_reuse_pools_and_keep_deterministic_keyword_edges() 
     );
     let mut query = f.icfg.call_bindings();
     let target = f.target(0, ReceiverSupply::None);
-    let first = query.bind(target).unwrap();
+    let first = query.bind_invocation(target).unwrap();
     let lengths = (query.transfers.len(), query.diagnostics.len());
-    assert_eq!(first, query.bind(target).unwrap());
+    assert_eq!(first, query.bind_invocation(target).unwrap());
     assert_eq!(lengths, (query.transfers.len(), query.diagnostics.len()));
     let mut second = f.icfg.call_bindings();
-    second.bind(target).unwrap();
+    second.bind_invocation(target).unwrap();
     assert_eq!(query.transfers, second.transfers);
     assert_eq!(query.diagnostics, second.diagnostics);
 }
@@ -754,7 +797,9 @@ fn selected_binding_formal_id_joins_native_pdg_without_name_matching() {
         "function consume(left, right) { const alias = right; return alias.execute(); }",
     );
     let mut query = fixture.icfg.call_bindings();
-    let binding = query.bind(fixture.target(0, ReceiverSupply::None)).unwrap();
+    let binding = query
+        .bind_invocation(fixture.target(0, ReceiverSupply::None))
+        .unwrap();
     let target = binding
         .transfers
         .slice(query.transfers())

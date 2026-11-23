@@ -267,7 +267,7 @@ impl ControlFlowGraph {
                 self.operands
                     .local_slots
                     .get(u.slot.0 as usize)
-                    .and_then(|&n| self.operands.name(n))
+                    .and_then(|&n| self.operands.operand_name(n))
                     .is_some_and(|key| s.used_vars.iter().any(|v| v == key))
             })
         }) && self.operands.local_writes.iter().all(|w| {
@@ -275,7 +275,7 @@ impl ControlFlowGraph {
                 self.operands
                     .local_slots
                     .get(w.slot.0 as usize)
-                    .and_then(|&n| self.operands.name(n))
+                    .and_then(|&n| self.operands.operand_name(n))
                     .is_some_and(|key| {
                         s.defined_vars
                             .iter()

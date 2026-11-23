@@ -343,7 +343,7 @@ pub struct FunctionOperands {
 
 impl FunctionOperands {
     /// Resolve a name without treating its spelling as symbol identity.
-    pub fn name(&self, id: OperandNameId) -> Option<&str> {
+    pub fn operand_name(&self, id: OperandNameId) -> Option<&str> {
         self.names.get(id.0 as usize).map(String::as_str)
     }
 

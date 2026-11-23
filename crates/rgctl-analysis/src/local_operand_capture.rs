@@ -112,13 +112,13 @@ impl CfgBuilder<'_> {
                     && self
                         .cfg
                         .operands
-                        .name(*name)
+                        .operand_name(*name)
                         .is_some_and(|n| used.iter().any(|v| v == n))
             })
             .map(|(_, value, name)| {
                 (
                     *value,
-                    self.resolve_local(self.cfg.operands.name(*name).unwrap_or("")),
+                    self.resolve_local(self.cfg.operands.operand_name(*name).unwrap_or("")),
                 )
             })
             .collect();

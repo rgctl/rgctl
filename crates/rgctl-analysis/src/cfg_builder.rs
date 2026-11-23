@@ -1071,7 +1071,7 @@ impl<'a> CfgBuilder<'a> {
     fn seed_formal_definitions(&mut self, line: usize) -> Result<()> {
         for index in 0..self.cfg.operands.formals.len() {
             let formal = &self.cfg.operands.formals[index];
-            let Some(name) = self.cfg.operands.name(formal.name) else {
+            let Some(name) = self.cfg.operands.operand_name(formal.name) else {
                 continue;
             };
             let name = name.to_owned();

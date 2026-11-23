@@ -33,7 +33,7 @@ fn reaches(flow: &LocalValueFlow, from: ExpressionId, to: ExpressionId) -> bool 
 }
 fn construction(cfg: &ControlFlowGraph, name: &str) -> ExpressionId {
     cfg.operands.calls.iter().find(|c| {
-        matches!(cfg.operands.expressions[c.callee.0 as usize].kind,ExpressionKind::Name(n) if cfg.operands.name(n)==Some(name))
+        matches!(cfg.operands.expressions[c.callee.0 as usize].kind,ExpressionKind::Name(n) if cfg.operands.operand_name(n)==Some(name))
     }).unwrap().result
 }
 #[test]
@@ -129,7 +129,7 @@ fn shadowed_slot_does_not_replace_outer_formal() {
         cfg.operands
             .local_slots
             .iter()
-            .any(|&name| cfg.operands.name(name) == Some("value#1"))
+            .any(|&name| cfg.operands.operand_name(name) == Some("value#1"))
     );
 }
 #[test]
@@ -265,7 +265,7 @@ fn go_rhs_names_are_reads_and_mixed_short_declarations_reuse_existing_slots() {
         !cfg.operands
             .local_slots
             .iter()
-            .any(|&n| cfg.operands.name(n) == Some("value#1"))
+            .any(|&n| cfg.operands.operand_name(n) == Some("value#1"))
     );
     let receiver = cfg.operands.calls.iter().find_map(|c| c.receiver).unwrap();
     assert!(!reaches(&flow, cfg.operands.formals[0].value, receiver));
@@ -321,7 +321,7 @@ fn selected_invocation_bindings_compose_with_exact_local_reads_and_returns() {
     let icfg = InterproceduralCFG::from_cfg_archive(&backend, configs).unwrap();
     let mut query = icfg.call_bindings();
     let binding = query
-        .bind(InvocationTarget {
+        .bind_invocation(InvocationTarget {
             call: CallRef {
                 caller: ids[0],
                 site: CallSiteId(0),
@@ -444,10 +444,10 @@ fn conditional_factory_return_values_reach_the_callers_receiver() {
     }
     let icfg = InterproceduralCFG::from_cfg_archive(&backend, configs).unwrap();
     let caller = icfg.get_cfg(ids[0]).unwrap();
-    let site=caller.operands.calls.iter().position(|call|matches!(caller.operands.expressions[call.callee.0 as usize].kind,ExpressionKind::Name(n) if caller.operands.name(n)==Some("make"))).unwrap();
+    let site=caller.operands.calls.iter().position(|call|matches!(caller.operands.expressions[call.callee.0 as usize].kind,ExpressionKind::Name(n) if caller.operands.operand_name(n)==Some("make"))).unwrap();
     let mut bindings = icfg.call_bindings();
     let binding = bindings
-        .bind(InvocationTarget {
+        .bind_invocation(InvocationTarget {
             call: CallRef {
                 caller: ids[0],
                 site: CallSiteId(site as u32),

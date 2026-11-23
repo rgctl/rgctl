@@ -162,7 +162,7 @@ impl LocalValueFlow {
             }
             let key = cfg
                 .operands
-                .name(cfg.operands.local_slots[usage.slot.0 as usize]);
+                .operand_name(cfg.operands.local_slots[usage.slot.0 as usize]);
             let Some(var) = key.and_then(|key| reaching.catalog.var_id_of(key)) else {
                 emit_diagnostic(LocalFlowDiagnostic::UnboundRead(usage.value));
                 continue;

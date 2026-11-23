@@ -7,7 +7,7 @@ and return/result transfers from the persisted function operand records.
 
 ```rust
 let mut query = icfg.call_bindings();
-let binding = query.bind(InvocationTarget {
+let binding = query.bind_invocation(InvocationTarget {
     call: CallRef { caller: caller_uuid, site: CallSiteId(0) },
     callee: callee_uuid,
     receiver: ReceiverSupply::None,

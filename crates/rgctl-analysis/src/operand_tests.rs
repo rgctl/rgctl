@@ -2,14 +2,14 @@ use super::*;
 use crate::cfg::ControlFlowGraph;
 use crate::cfg_builder::build_cfg_for_function;
 
-fn name(facts: &FunctionOperands, value: ExpressionId) -> &str {
+fn expression_operand_name(facts: &FunctionOperands, value: ExpressionId) -> &str {
     match facts.expressions[value.0 as usize].kind {
-        ExpressionKind::Name(id) | ExpressionKind::Member(id) => facts.name(id).unwrap(),
+        ExpressionKind::Name(id) | ExpressionKind::Member(id) => facts.operand_name(id).unwrap(),
         kind => panic!("expected named operand, got {kind:?}"),
     }
 }
 
-fn arguments(facts: &FunctionOperands, call: usize) -> &[ArgumentFact] {
+fn invocation_arguments(facts: &FunctionOperands, call: usize) -> &[ArgumentFact] {
     facts.calls[call].arguments.slice(&facts.arguments).unwrap()
 }
 
@@ -54,7 +54,7 @@ fn receiver_argument_formal_and_return_roles_round_trip_in_six_languages() {
             .formals
             .iter()
             .filter_map(|f| match f.kind {
-                FormalKind::Positional(index) => Some((index, facts.name(f.name).unwrap())),
+                FormalKind::Positional(index) => Some((index, facts.operand_name(f.name).unwrap())),
                 _ => None,
             })
             .collect();
@@ -66,11 +66,19 @@ fn receiver_argument_formal_and_return_roles_round_trip_in_six_languages() {
             "value.execute(other)",
             "{language}"
         );
-        assert_eq!(name(facts, call.callee), "execute", "{language}");
-        assert_eq!(name(facts, call.receiver.unwrap()), "value", "{language}");
-        assert_eq!(arguments(facts, 0).len(), 1, "{language}");
         assert_eq!(
-            name(facts, arguments(facts, 0)[0].value),
+            expression_operand_name(facts, call.callee),
+            "execute",
+            "{language}"
+        );
+        assert_eq!(
+            expression_operand_name(facts, call.receiver.unwrap()),
+            "value",
+            "{language}"
+        );
+        assert_eq!(invocation_arguments(facts, 0).len(), 1, "{language}");
+        assert_eq!(
+            expression_operand_name(facts, invocation_arguments(facts, 0)[0].value),
             "other",
             "{language}"
         );
@@ -129,11 +137,11 @@ fn nested_and_repeated_same_line_invocations_keep_distinct_roles() {
         facts
             .calls
             .iter()
-            .map(|c| name(facts, c.callee))
+            .map(|c| expression_operand_name(facts, c.callee))
             .collect::<Vec<_>>(),
         ["consume", "make", "execute", "consume"]
     );
-    let outer = arguments(facts, 0);
+    let outer = invocation_arguments(facts, 0);
     assert_eq!(outer.len(), 2);
     assert_eq!(
         facts.expressions[outer[0].value.0 as usize].kind,
@@ -143,13 +151,22 @@ fn nested_and_repeated_same_line_invocations_keep_distinct_roles() {
         facts.expressions[outer[1].value.0 as usize].kind,
         ExpressionKind::CallResult(CallSiteId(2))
     );
-    assert_eq!(name(facts, arguments(facts, 1)[0].value), "x");
-    assert_eq!(name(facts, facts.calls[2].receiver.unwrap()), "x");
-    assert_eq!(name(facts, arguments(facts, 2)[0].value), "y");
     assert_eq!(
-        arguments(facts, 3)
+        expression_operand_name(facts, invocation_arguments(facts, 1)[0].value),
+        "x"
+    );
+    assert_eq!(
+        expression_operand_name(facts, facts.calls[2].receiver.unwrap()),
+        "x"
+    );
+    assert_eq!(
+        expression_operand_name(facts, invocation_arguments(facts, 2)[0].value),
+        "y"
+    );
+    assert_eq!(
+        invocation_arguments(facts, 3)
             .iter()
-            .map(|a| name(facts, a.value))
+            .map(|a| expression_operand_name(facts, a.value))
             .collect::<Vec<_>>(),
         ["x", "y"]
     );
@@ -182,9 +199,13 @@ fn construction_is_the_actual_value_of_the_outer_invocation() {
             InvocationKind::Construction,
             "{language}"
         );
-        assert_eq!(name(facts, facts.calls[1].callee), "X", "{language}");
         assert_eq!(
-            arguments(facts, 0)[0].value,
+            expression_operand_name(facts, facts.calls[1].callee),
+            "X",
+            "{language}"
+        );
+        assert_eq!(
+            invocation_arguments(facts, 0)[0].value,
             facts.calls[1].result,
             "{language}"
         );
@@ -212,9 +233,11 @@ fn python_parameter_and_actual_binding_conventions_are_retained() {
     );
     assert!(facts.formals[1].default_value.is_some());
     assert!(facts.formals[2].default_value.is_some());
-    let args = arguments(facts, 0);
-    assert!(matches!(args[0].kind, ArgumentKind::Named(id) if facts.name(id) == Some("named")));
-    assert_eq!(name(facts, args[0].value), "other");
+    let args = invocation_arguments(facts, 0);
+    assert!(
+        matches!(args[0].kind, ArgumentKind::Named(id) if facts.operand_name(id) == Some("named"))
+    );
+    assert_eq!(expression_operand_name(facts, args[0].value), "other");
     assert_eq!(args[1].kind, ArgumentKind::SpreadPositional);
     assert_eq!(args[2].kind, ArgumentKind::SpreadKeywords);
     assert!(facts.valid_references());
@@ -230,7 +253,7 @@ fn go_receiver_grouped_parameters_variadics_and_multiple_returns() {
         facts
             .formals
             .iter()
-            .map(|f| (facts.name(f.name).unwrap(), f.kind))
+            .map(|f| (facts.operand_name(f.name).unwrap(), f.kind))
             .collect::<Vec<_>>(),
         [
             ("s", FormalKind::Receiver),
@@ -268,7 +291,7 @@ fn javascript_typescript_defaults_optional_and_rest_parameters() {
         );
         assert!(facts.formals[1].optional, "{language}");
         assert_eq!(
-            arguments(facts, 0)[1].kind,
+            invocation_arguments(facts, 0)[1].kind,
             ArgumentKind::SpreadPositional,
             "{language}"
         );
@@ -324,7 +347,11 @@ fn nested_callable_body_does_not_leak_invocations_into_its_parent() {
             1,
             "{language}: nested body leaked into caller"
         );
-        assert_eq!(name(facts, facts.calls[0].callee), "execute", "{language}");
+        assert_eq!(
+            expression_operand_name(facts, facts.calls[0].callee),
+            "execute",
+            "{language}"
+        );
         assert_eq!(
             facts.returns.len(),
             1,
@@ -417,7 +444,10 @@ fn exact_callable_byte_range_selects_the_matching_operand_record() {
             })
         );
         assert_eq!(cfg.operands.calls.len(), 1);
-        assert_eq!(name(&cfg.operands, cfg.operands.calls[0].callee), expected);
+        assert_eq!(
+            expression_operand_name(&cfg.operands, cfg.operands.calls[0].callee),
+            expected
+        );
     }
 }
 
@@ -452,9 +482,12 @@ fn aggregate_construction_and_interpolated_calls_are_not_literal_constants() {
     else {
         panic!("aggregate lost its construction role");
     };
-    assert_eq!(name(facts, type_value), "X");
+    assert_eq!(expression_operand_name(facts, type_value), "X");
     assert_eq!(facts.calls.len(), 1);
-    assert_eq!(name(facts, facts.calls[0].callee), "makeValue");
+    assert_eq!(
+        expression_operand_name(facts, facts.calls[0].callee),
+        "makeValue"
+    );
 
     let cfg = build_cfg_for_function("python", "def example():\n return f'{make()}'\n", "example")
         .unwrap();

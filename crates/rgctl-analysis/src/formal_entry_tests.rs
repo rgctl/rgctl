@@ -232,7 +232,10 @@ fn formal_ids_survive_cfg_and_pdg_archive_round_trip() {
         assert_eq!(defs.len(), cfg.operands.formals.len());
         for (id, node) in defs {
             let formal = &cfg.operands.formals[id.0 as usize];
-            assert_eq!(node.statement.text, cfg.operands.name(formal.name).unwrap());
+            assert_eq!(
+                node.statement.text,
+                cfg.operands.operand_name(formal.name).unwrap()
+            );
             assert!(pdg.nodes.contains_key(&node.id));
         }
         assert_eq!(graph.data_deps.len(), pdg.data_deps.len());

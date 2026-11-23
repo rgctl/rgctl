@@ -506,7 +506,7 @@ impl<'a, C: InterproceduralCfgAccess + ?Sized> Query<'a, C> {
         if self.limited {
             return;
         }
-        let Ok(binding) = self.bindings.bind(target) else {
+        let Ok(binding) = self.bindings.bind_invocation(target) else {
             self.diagnostic(OriginDiagnostic::BindingError(target));
             return;
         };

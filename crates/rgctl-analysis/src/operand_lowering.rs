@@ -8,7 +8,7 @@ use tree_sitter::Node;
 
 const EXPRESSION_DEPTH_LIMIT: usize = 64;
 
-fn index(value: usize) -> Result<u32> {
+fn checked_operand_index(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::ParseError {
         file: "source".into(),
         line: 0,
@@ -16,14 +16,14 @@ fn index(value: usize) -> Result<u32> {
     })
 }
 
-fn span(node: Node<'_>) -> Result<OperandSpan> {
+fn native_operand_span(node: Node<'_>) -> Result<OperandSpan> {
     Ok(OperandSpan {
-        start: index(node.start_byte())?,
-        end: index(node.end_byte())?,
+        start: checked_operand_index(node.start_byte())?,
+        end: checked_operand_index(node.end_byte())?,
     })
 }
 
-fn children(node: Node<'_>) -> smallvec::SmallVec<[Node<'_>; 8]> {
+fn native_operand_children(node: Node<'_>) -> smallvec::SmallVec<[Node<'_>; 8]> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter(|n| n.kind() != "comment")
@@ -62,8 +62,8 @@ pub(crate) fn lower_function_operands(
         _ => {
             return Ok(FunctionOperands {
                 status: OperandStatus::UnsupportedLanguage,
-                span: Some(span(function)?),
-                source_line: Some(index(function.start_position().row + 1)?),
+                span: Some(native_operand_span(function)?),
+                source_line: Some(checked_operand_index(function.start_position().row + 1)?),
                 ..Default::default()
             });
         }
@@ -72,8 +72,8 @@ pub(crate) fn lower_function_operands(
         facts: FunctionOperands {
             language,
             status: OperandStatus::Captured,
-            span: Some(span(function)?),
-            source_line: Some(index(function.start_position().row + 1)?),
+            span: Some(native_operand_span(function)?),
+            source_line: Some(checked_operand_index(function.start_position().row + 1)?),
             ..Default::default()
         },
         source,
@@ -106,21 +106,21 @@ pub(crate) fn lower_function_operands(
             && matches!(rhs.kind(), "call_expression" | "type_assertion_expression")
         {
             let source = lowerer.expression(rhs, 0)?;
-            for (position, target) in children(left).into_iter().enumerate() {
+            for (position, target) in native_operand_children(left).into_iter().enumerate() {
                 if target.kind() != "identifier" {
                     continue;
                 }
-                let value = ExpressionId(index(lowerer.facts.expressions.len())?);
+                let value = ExpressionId(checked_operand_index(lowerer.facts.expressions.len())?);
                 let inputs = lowerer.inputs(&[source])?;
                 lowerer.facts.expressions.push(ExpressionFact {
-                    span: Some(span(target)?),
+                    span: Some(native_operand_span(target)?),
                     kind: ExpressionKind::Projection {
-                        position: index(position)?,
+                        position: checked_operand_index(position)?,
                     },
                     inputs,
                 });
                 lowerer.facts.assignment_values.push(AssignmentValueFact {
-                    target: span(target)?,
+                    target: native_operand_span(target)?,
                     value,
                 });
             }
@@ -172,7 +172,7 @@ pub(crate) fn lower_function_operands(
     {
         lowerer.return_site(body, true)?;
     } else if language == OperandLanguage::Rust
-        && let Some(tail) = children(body).last().copied()
+        && let Some(tail) = native_operand_children(body).last().copied()
         && !matches!(
             tail.kind(),
             "let_declaration" | "expression_statement" | "return_expression" | "item"
@@ -186,7 +186,7 @@ pub(crate) fn lower_function_operands(
         language,
         OperandLanguage::Ruby | OperandLanguage::Elixir | OperandLanguage::Puppet
     ) {
-        if let Some(tail) = children(body).last().copied()
+        if let Some(tail) = native_operand_children(body).last().copied()
             && !matches!(
                 tail.kind(),
                 "return" | "return_statement" | "return_expression"
@@ -213,7 +213,9 @@ impl<'a> Lowerer<'a> {
             && !(self.facts.language == OperandLanguage::Elixir
                 && node.kind() == "call"
                 && node.child_by_field_name("do_block").is_none()
-                && !children(node).iter().any(|n| n.kind() == "do_block")))
+                && !native_operand_children(node)
+                    .iter()
+                    .any(|n| n.kind() == "do_block")))
             || matches!(
                 node.kind(),
                 "lambda_expression"
@@ -226,18 +228,18 @@ impl<'a> Lowerer<'a> {
             )
     }
 
-    fn name(&mut self, text: &'a str) -> Result<OperandNameId> {
+    fn intern_operand_name(&mut self, text: &'a str) -> Result<OperandNameId> {
         if let Some(&id) = self.names.get(text) {
             return Ok(id);
         }
-        let id = OperandNameId(index(self.facts.names.len())?);
+        let id = OperandNameId(checked_operand_index(self.facts.names.len())?);
         self.facts.names.push(text.into());
         self.names.insert(text, id);
         Ok(id)
     }
 
     fn node_name(&mut self, node: Node<'_>) -> Result<OperandNameId> {
-        self.name(
+        self.intern_operand_name(
             node.utf8_text(self.source)
                 .unwrap_or("")
                 .trim_start_matches('$'),
@@ -246,7 +248,7 @@ impl<'a> Lowerer<'a> {
 
     fn diagnostic(&mut self, node: Node<'_>, kind: OperandDiagnosticKind) -> Result<()> {
         self.facts.diagnostics.push(OperandDiagnostic {
-            span: span(node)?,
+            span: native_operand_span(node)?,
             kind,
         });
         Ok(())
@@ -254,8 +256,8 @@ impl<'a> Lowerer<'a> {
 
     fn inputs(&mut self, values: &[ExpressionId]) -> Result<OperandRange> {
         let range = OperandRange {
-            start: index(self.facts.inputs.len())?,
-            len: index(values.len())?,
+            start: checked_operand_index(self.facts.inputs.len())?,
+            len: checked_operand_index(values.len())?,
         };
         self.facts.inputs.extend_from_slice(values);
         Ok(range)
@@ -268,11 +270,11 @@ impl<'a> Lowerer<'a> {
         kind: FormalKind,
         default: Option<Node<'_>>,
     ) -> Result<()> {
-        let id = FormalId(index(self.facts.formals.len())?);
-        let name = self.name(name)?;
-        let value = ExpressionId(index(self.facts.expressions.len())?);
+        let id = FormalId(checked_operand_index(self.facts.formals.len())?);
+        let name = self.intern_operand_name(name)?;
+        let value = ExpressionId(checked_operand_index(self.facts.expressions.len())?);
         self.facts.expressions.push(ExpressionFact {
-            span: node.map(span).transpose()?,
+            span: node.map(native_operand_span).transpose()?,
             kind: ExpressionKind::Formal(id),
             inputs: OperandRange::default(),
         });
@@ -299,7 +301,7 @@ impl<'a> Lowerer<'a> {
             language,
             OperandLanguage::Java | OperandLanguage::Groovy | OperandLanguage::CSharp
         ) {
-            let is_static = children(function)
+            let is_static = native_operand_children(function)
                 .into_iter()
                 .filter(|n| matches!(n.kind(), "modifiers" | "modifier"))
                 .any(|n| {
@@ -336,7 +338,7 @@ impl<'a> Lowerer<'a> {
                 .is_some_and(|n| n.kind() == "class_definition")
             {
                 let decorators: Vec<_> = decorated
-                    .map(children)
+                    .map(native_operand_children)
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|n| n.kind() == "decorator")
@@ -407,7 +409,7 @@ impl<'a> Lowerer<'a> {
         }
         if let Some(receiver) = function.child_by_field_name("receiver") {
             self.facts.receiver_convention = ReceiverConvention::Explicit;
-            for param in children(receiver) {
+            for param in native_operand_children(receiver) {
                 self.parameter(param, FormalKind::Receiver)?;
             }
         }
@@ -450,17 +452,21 @@ impl<'a> Lowerer<'a> {
                     .and_then(|n| n.child_by_field_name("parameters"))
             })
             .or_else(|| {
-                children(function)
+                native_operand_children(function)
                     .into_iter()
                     .find(|n| matches!(n.kind(), "function_value_parameters" | "parameter_list"))
             })
             .or_else(|| {
                 if language == OperandLanguage::Elixir {
-                    children(function)
+                    native_operand_children(function)
                         .into_iter()
                         .find(|n| n.kind() == "arguments")
                         .and_then(|n| n.named_child(0))
-                        .and_then(|n| children(n).into_iter().find(|n| n.kind() == "arguments"))
+                        .and_then(|n| {
+                            native_operand_children(n)
+                                .into_iter()
+                                .find(|n| n.kind() == "arguments")
+                        })
                 } else {
                     None
                 }
@@ -469,7 +475,7 @@ impl<'a> Lowerer<'a> {
             function
                 .child_by_field_name("signature")
                 .and_then(|n| {
-                    children(n)
+                    native_operand_children(n)
                         .into_iter()
                         .find(|n| n.kind() == "function_signature")
                 })
@@ -477,7 +483,7 @@ impl<'a> Lowerer<'a> {
         });
         let direct_parameters;
         let nodes = if language == OperandLanguage::Swift {
-            direct_parameters = children(function)
+            direct_parameters = native_operand_children(function)
                 .into_iter()
                 .filter(|n| n.kind() == "parameter")
                 .collect::<smallvec::SmallVec<_>>();
@@ -486,7 +492,7 @@ impl<'a> Lowerer<'a> {
             if parameters.kind() == "identifier" {
                 smallvec::smallvec![parameters]
             } else {
-                children(parameters)
+                native_operand_children(parameters)
             }
         } else {
             return Ok(());
@@ -538,7 +544,7 @@ impl<'a> Lowerer<'a> {
             self.parameter(param, kind)?;
             if matches!(kind, FormalKind::Positional(_)) {
                 position = position
-                    .checked_add(index(self.facts.formals.len() - before)?)
+                    .checked_add(checked_operand_index(self.facts.formals.len() - before)?)
                     .ok_or_else(|| Error::SerdeError("formal index overflow".into()))?;
             }
             if language == OperandLanguage::Python && rest {
@@ -547,7 +553,7 @@ impl<'a> Lowerer<'a> {
         }
         if language == OperandLanguage::Go
             && function.child_by_field_name("result").is_some_and(|n| {
-                children(n)
+                native_operand_children(n)
                     .iter()
                     .any(|n| n.child_by_field_name("name").is_some())
             })
@@ -579,7 +585,7 @@ impl<'a> Lowerer<'a> {
                     }
                 })
                 .or_else(|| {
-                    children(param).into_iter().find(|n| {
+                    native_operand_children(param).into_iter().find(|n| {
                         matches!(
                             n.kind(),
                             "identifier"
@@ -616,7 +622,7 @@ impl<'a> Lowerer<'a> {
             let kind = match kind {
                 FormalKind::Positional(position) => FormalKind::Positional(
                     position
-                        .checked_add(index(offset)?)
+                        .checked_add(checked_operand_index(offset)?)
                         .ok_or_else(|| Error::SerdeError("formal index overflow".into()))?,
                 ),
                 other => other,
@@ -639,10 +645,10 @@ impl<'a> Lowerer<'a> {
         if let Some(&id) = self.expressions.get(&node.id()) {
             return Ok(id);
         }
-        let id = ExpressionId(index(self.facts.expressions.len())?);
+        let id = ExpressionId(checked_operand_index(self.facts.expressions.len())?);
         self.expressions.insert(node.id(), id);
         self.facts.expressions.push(ExpressionFact {
-            span: Some(span(node)?),
+            span: Some(native_operand_span(node)?),
             kind: ExpressionKind::Unknown,
             inputs: OperandRange::default(),
         });
@@ -708,7 +714,7 @@ impl<'a> Lowerer<'a> {
             if let Some(type_node) = type_node {
                 let type_value = self.expression(type_node, depth + 1)?;
                 inputs.push(type_value);
-                for child in children(node) {
+                for child in native_operand_children(node) {
                     if child.id() != type_node.id() {
                         inputs.push(self.expression(child, depth + 1)?);
                     }
@@ -740,7 +746,7 @@ impl<'a> Lowerer<'a> {
                 | "raw_string_literal"
                 | "char_literal"
                 | "character_literal"
-        ) && !children(node).iter().any(|n| {
+        ) && !native_operand_children(node).iter().any(|n| {
             n.kind().contains("interpolation")
                 || matches!(
                     n.kind(),
@@ -749,14 +755,14 @@ impl<'a> Lowerer<'a> {
         }) {
             ExpressionKind::Literal
         } else {
-            for child in children(node) {
+            for child in native_operand_children(node) {
                 inputs.push(self.expression(child, depth + 1)?);
             }
             if kind == "parenthesized_expression"
                 || (kind == "simple_expansion")
                 || (kind == "string"
-                    && children(node).len() == 1
-                    && children(node)[0].kind() == "simple_expansion")
+                    && native_operand_children(node).len() == 1
+                    && native_operand_children(node)[0].kind() == "simple_expansion")
             {
                 ExpressionKind::Parenthesized
             } else {
@@ -765,7 +771,7 @@ impl<'a> Lowerer<'a> {
         };
         let inputs = self.inputs(&inputs)?;
         self.facts.expressions[id.0 as usize] = ExpressionFact {
-            span: Some(span(node)?),
+            span: Some(native_operand_span(node)?),
             kind: expression_kind,
             inputs,
         };
@@ -773,14 +779,14 @@ impl<'a> Lowerer<'a> {
     }
 
     fn call(&mut self, node: Node<'_>, result: ExpressionId, depth: usize) -> Result<CallSiteId> {
-        let id = CallSiteId(index(self.facts.calls.len())?);
+        let id = CallSiteId(checked_operand_index(self.facts.calls.len())?);
         let kind = if matches!(node.kind(), "new_expression" | "object_creation_expression") {
             InvocationKind::Construction
         } else {
             InvocationKind::Call
         };
         self.facts.calls.push(CallSiteFact {
-            span: span(node)?,
+            span: native_operand_span(node)?,
             callee: result,
             receiver: None,
             arguments: OperandRange::default(),
@@ -826,16 +832,16 @@ impl<'a> Lowerer<'a> {
         let list = node
             .child_by_field_name("arguments")
             .or_else(|| {
-                children(node)
+                native_operand_children(node)
                     .into_iter()
                     .find(|n| matches!(n.kind(), "arguments" | "value_arguments"))
             })
             .or_else(|| {
-                children(node)
+                native_operand_children(node)
                     .into_iter()
                     .find(|n| n.kind() == "call_suffix")
                     .and_then(|n| {
-                        children(n)
+                        native_operand_children(n)
                             .into_iter()
                             .find(|n| n.kind() == "value_arguments")
                     })
@@ -845,9 +851,9 @@ impl<'a> Lowerer<'a> {
             node.children_by_field_name("argument", &mut cursor)
                 .collect()
         } else if self.facts.language == OperandLanguage::Puppet && node.kind() == "function_call" {
-            children(node).into_iter().skip(1).collect()
+            native_operand_children(node).into_iter().skip(1).collect()
         } else {
-            list.map(children).unwrap_or_default()
+            list.map(native_operand_children).unwrap_or_default()
         };
         {
             for argument in actuals {
@@ -889,12 +895,12 @@ impl<'a> Lowerer<'a> {
             }
         }
         let range = OperandRange {
-            start: index(self.facts.arguments.len())?,
-            len: index(arguments.len())?,
+            start: checked_operand_index(self.facts.arguments.len())?,
+            len: checked_operand_index(arguments.len())?,
         };
         self.facts.arguments.extend(arguments);
         self.facts.calls[id.0 as usize] = CallSiteFact {
-            span: span(node)?,
+            span: native_operand_span(node)?,
             callee,
             receiver,
             arguments: range,
@@ -908,13 +914,13 @@ impl<'a> Lowerer<'a> {
         let nodes = if implicit {
             smallvec::smallvec![node]
         } else {
-            let nodes = children(node);
+            let nodes = native_operand_children(node);
             if nodes.len() == 1
                 && nodes
                     .first()
                     .is_some_and(|n| matches!(n.kind(), "expression_list" | "argument_list"))
             {
-                children(nodes[0])
+                native_operand_children(nodes[0])
             } else {
                 nodes
             }
@@ -925,7 +931,7 @@ impl<'a> Lowerer<'a> {
         }
         let values = self.inputs(&values)?;
         self.facts.returns.push(ReturnFact {
-            span: span(node)?,
+            span: native_operand_span(node)?,
             values,
             implicit,
         });
@@ -1002,7 +1008,7 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
         }
     }
     match root.kind() {
-        "declaration" | "declaration_command" => children(root)
+        "declaration" | "declaration_command" => native_operand_children(root)
             .into_iter()
             .filter(|n| matches!(n.kind(), "init_declarator" | "variable_assignment"))
             .map(|n| {
@@ -1019,7 +1025,7 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
                 .child_by_field_name("pattern")
                 .or_else(|| root.child_by_field_name("name"))
                 .or_else(|| {
-                    children(root)
+                    native_operand_children(root)
                         .into_iter()
                         .find(|n| n.kind() == "variable_declaration")
                         .and_then(|n| n.named_child(0))
@@ -1038,16 +1044,16 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
             .child_by_field_name("pattern")
             .map(|target| vec![(target, root.child_by_field_name("value").map(scalar))])
             .unwrap_or_default(),
-        "var_declaration" | "var_spec_list" => children(root)
+        "var_declaration" | "var_spec_list" => native_operand_children(root)
             .into_iter()
             .flat_map(local_write_sources)
             .collect(),
         "variable_declaration"
-            if children(root)
+            if native_operand_children(root)
                 .iter()
                 .any(|n| n.kind() == "assignment_statement") =>
         {
-            children(root)
+            native_operand_children(root)
                 .into_iter()
                 .flat_map(local_write_sources)
                 .collect()
@@ -1055,7 +1061,7 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
         "variable_declaration"
         | "lexical_declaration"
         | "local_variable_declaration"
-        | "local_declaration_statement" => children(root)
+        | "local_declaration_statement" => native_operand_children(root)
             .into_iter()
             .flat_map(local_write_sources)
             .collect(),
@@ -1083,7 +1089,7 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
             let Some(left) = root
                 .child_by_field_name("left")
                 .or_else(|| {
-                    children(root)
+                    native_operand_children(root)
                         .into_iter()
                         .find(|n| n.kind() == "variable_list")
                 })
@@ -1100,7 +1106,7 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
             let Some(right) = root
                 .child_by_field_name("right")
                 .or_else(|| {
-                    children(root)
+                    native_operand_children(root)
                         .into_iter()
                         .find(|n| n.kind() == "expression_list")
                 })
@@ -1115,12 +1121,12 @@ pub(crate) fn local_write_sources(node: Node<'_>) -> Vec<(Node<'_>, Option<Node<
                 return vec![(left, None)];
             };
             let lefts = if matches!(left.kind(), "expression_list" | "variable_list") {
-                children(left)
+                native_operand_children(left)
             } else {
                 smallvec::smallvec![left]
             };
             let rights = if right.kind() == "expression_list" {
-                children(right)
+                native_operand_children(right)
             } else {
                 smallvec::smallvec![right]
             };
@@ -1181,7 +1187,7 @@ fn branch_value(mut node: Node<'_>) -> Option<Node<'_>> {
         ) {
             return Some(node);
         }
-        node = children(node).last().copied()?;
+        node = native_operand_children(node).last().copied()?;
     }
     None
 }

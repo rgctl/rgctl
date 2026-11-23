@@ -145,7 +145,7 @@ fn check(language: &str) {
         .iter()
         .find(|f| f.kind == FormalKind::Positional(0))
         .unwrap_or_else(|| panic!("{language}: missing formal: {facts:#?}"));
-    let site = facts.calls.iter().position(|c| matches!(facts.expressions[c.callee.0 as usize].kind, ExpressionKind::Name(n) if facts.name(n) == Some("operand_sink"))).unwrap_or_else(|| panic!("{language}: missing call: {facts:#?}"));
+    let site = facts.calls.iter().position(|c| matches!(facts.expressions[c.callee.0 as usize].kind, ExpressionKind::Name(n) if facts.operand_name(n) == Some("operand_sink"))).unwrap_or_else(|| panic!("{language}: missing call: {facts:#?}"));
     let seed_expression = formal.value;
     let result_expression = facts.calls[site].result;
     let argument = facts.calls[site]

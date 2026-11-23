@@ -27,11 +27,11 @@ impl Fixture {
         let icfg = InterproceduralCFG::from_cfg_archive(&backend, cfgs).unwrap();
         Self { backend, icfg, ids }
     }
-    fn cfg(&self, index: usize) -> &ControlFlowGraph {
+    fn fixture_cfg(&self, index: usize) -> &ControlFlowGraph {
         self.icfg.get_cfg(self.ids[index]).unwrap()
     }
     fn call(&self, index: usize, name: &str) -> CallRef {
-        let cfg = self.cfg(index);
+        let cfg = self.fixture_cfg(index);
         let site = cfg
             .operands
             .calls
@@ -39,7 +39,7 @@ impl Fixture {
             .position(
                 |c| match cfg.operands.expressions[c.callee.0 as usize].kind {
                     ExpressionKind::Name(n) | ExpressionKind::Member(n) => {
-                        cfg.operands.name(n) == Some(name)
+                        cfg.operands.operand_name(n) == Some(name)
                     }
                     _ => false,
                 },
@@ -64,8 +64,8 @@ impl Fixture {
         }
     }
     fn allocation(&self, index: usize, name: &str) -> ValueRef {
-        let cfg = self.cfg(index);
-        if let Some((i,_))=cfg.operands.expressions.iter().enumerate().find(|(_,e)|matches!(e.kind,ExpressionKind::Construction(ty) if matches!(cfg.operands.expressions[ty.0 as usize].kind,ExpressionKind::Name(n) if cfg.operands.name(n)==Some(name)))) {
+        let cfg = self.fixture_cfg(index);
+        if let Some((i,_))=cfg.operands.expressions.iter().enumerate().find(|(_,e)|matches!(e.kind,ExpressionKind::Construction(ty) if matches!(cfg.operands.expressions[ty.0 as usize].kind,ExpressionKind::Name(n) if cfg.operands.operand_name(n)==Some(name)))) {
             return ValueRef{function:self.ids[index],expression:ExpressionId(i as u32)}
         }
         let site = self.call(index, name).site;
@@ -323,7 +323,7 @@ fn global_limits_and_invalid_invocations_are_explicit() {
             ("execute", "class X{execute(){return 100;}}"),
         ],
     );
-    let receiver = f.cfg(0).operands.formals[0].value;
+    let receiver = f.fixture_cfg(0).operands.formals[0].value;
     let seed = seed(
         ValueRef {
             function: f.ids[0],
@@ -396,7 +396,7 @@ fn borrowed_archive_view_matches_owned_records() {
     let seeds = [seed(
         ValueRef {
             function: f.ids[0],
-            expression: f.cfg(0).operands.formals[0].value,
+            expression: f.fixture_cfg(0).operands.formals[0].value,
         },
         100,
     )];

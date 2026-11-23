@@ -188,7 +188,7 @@ pub fn criterion_for_parameter(
         .operands
         .formals
         .iter()
-        .find(|formal| cfg.operands.name(formal.name) == Some(param_name))
+        .find(|formal| cfg.operands.operand_name(formal.name) == Some(param_name))
         && let Some(entry) = cfg
             .operands
             .local_writes
