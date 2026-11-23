@@ -430,16 +430,34 @@ pub fn extract_decorator_relations(
 
 pub fn containing_class_name(node: Node, source: &[u8]) -> Option<String> {
     let mut current = node;
+    let mut classes: Vec<&str> = Vec::new();
     while let Some(parent) = current.parent() {
-        if parent.kind() == "class_definition" {
-            return parent
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source).ok())
-                .map(str::to_string);
+        match parent.kind() {
+            "function_definition" | "lambda" => {
+                if classes.is_empty() {
+                    return None;
+                }
+                break;
+            }
+            "class_definition" => {
+                if let Some(name) = parent
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .filter(|s| !s.is_empty())
+                {
+                    classes.push(name);
+                }
+            }
+            _ => {}
         }
         current = parent;
     }
-    None
+    if classes.is_empty() {
+        None
+    } else {
+        classes.reverse();
+        Some(classes.join("."))
+    }
 }
 
 pub fn decorator_name_and_args(decorator: Node, source: &[u8]) -> Option<(String, Option<String>)> {

@@ -191,6 +191,16 @@ pub fn extract_all_single_pass(
     file_path: &Path,
     source: &[u8],
 ) -> Result<ExtractAllResult> {
+    extract_all_single_pass_in_repo(plugin, file_path, None, source)
+}
+
+/// Repository-aware single-pass extraction using `logical_path` for module qualification.
+pub fn extract_all_single_pass_in_repo(
+    plugin: &PythonPlugin,
+    file_path: &Path,
+    logical_path: Option<&Path>,
+    source: &[u8],
+) -> Result<ExtractAllResult> {
     let tree =
         parse_with_pool("python", python_grammar(), source).map_err(|e| Error::ParseError {
             file: file_path.to_path_buf(),
@@ -329,13 +339,7 @@ pub fn extract_all_single_pass(
                         }
                     }
                     "lambda" => {
-                        let class_qn = ctx.scopes.current_type().and_then(|f| {
-                            if f.kind == ScopeKind::Class {
-                                Some(f.qualified_prefix.clone())
-                            } else {
-                                None
-                            }
-                        });
+                        let class_qn = rgctl_plugin_helpers::containing_class_name(node, source);
                         if let Some(sym) = depth::extract_lambda_symbol(
                             node,
                             source,
@@ -507,10 +511,19 @@ pub fn extract_all_single_pass(
             continue;
         };
         let enclosing_class = from_fn.qualified_name.as_deref().and_then(|qn| {
-            let owner = qn.rsplit_once('.').map(|(o, _)| o)?;
+            let owner = qn
+                .strip_suffix(".<init>")
+                .or_else(|| qn.rsplit_once('.').map(|(o, _)| o))?;
+            let leaf = owner.rsplit('.').next().unwrap_or(owner);
             ctx.symbols.iter().find(|s| {
                 s.symbol_type == SymbolType::Class
-                    && (s.qualified_name.as_deref() == Some(owner) || s.name == owner)
+                    && (s.qualified_name.as_deref() == Some(owner)
+                        || s.name == owner
+                        || (s.name == leaf
+                            && (s.location.start_line, s.location.start_column)
+                                <= (from_fn.location.start_line, from_fn.location.start_column)
+                            && (from_fn.location.end_line, from_fn.location.end_column)
+                                <= (s.location.end_line, s.location.end_column)))
             })
         });
         if let Some(rel) = depth::maybe_subscript_call_relation(
@@ -533,11 +546,17 @@ pub fn extract_all_single_pass(
         &mut relations,
     );
 
+    let mut result = ExtractAllResult::from_parts(ctx.symbols, relations);
+    result.file_namespace = rgctl_plugin_helpers::qualified_names::qualify_python_file_in_module(
+        file_path,
+        logical_path.unwrap_or(file_path),
+        &mut result.symbols,
+        &mut result.relations,
+    );
     rgctl_plugin_helpers::callable_identity::finish(
         rgctl_plugin_helpers::callable_identity::Policy::Python,
-        &mut ctx.symbols,
-        &mut relations,
+        &mut result.symbols,
+        &mut result.relations,
     );
-
-    Ok(ExtractAllResult::from_parts(ctx.symbols, relations))
+    Ok(result)
 }

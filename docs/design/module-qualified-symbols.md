@@ -1,10 +1,9 @@
-# File qualification for JavaScript and TypeScript declarations
+# File qualification for JavaScript, TypeScript and Python declarations
 
-JavaScript and TypeScript now supply `qualified_name` for declarations that
+JavaScript, TypeScript and Python now supply `qualified_name` for declarations that
 previously left it empty. `src/app.ts` emits `src.app.exercise`; a missing name
 inside that function includes its lexical owner. Existing explicit owner names
-and callable identity discriminators are preserved. Python and Go qualification
-remain separate follow-ups under issue #204.
+and callable identity discriminators are preserved. Go qualification remains a separate follow-up under issue #204.
 
 Callables whose candidate `qualified_name` (`{owner}.{name}`) directly collides
 with an explicit native-owned `qualified_name` in the same file keep their
@@ -14,7 +13,7 @@ merge with the native `Foo.create` method, whereas `src/Foo.ts` qualifies free
 `create()` as `src.Foo.create` without colliding. Literal callable names
 containing dots also retain their existing representation, so a property such as
 `outer.inner` cannot merge with a nested `inner` function. Uncallable anonymous
-callbacks (`anonymous`, `anonymous@L{line}:{col}`) leave `qualified_name` unset
+callbacks (`anonymous`, `anonymous@L{line}:{col}`, `<lambda@{line}:{col}>`) leave `qualified_name` unset
 while disambiguating any nested named declarations via `.L{line}`.
 
 The qualifier runs on extraction workers after the existing tree walk. It does
@@ -43,7 +42,7 @@ policies leave both markers unset.
 
 Identical source reused in another same-stem file or checkout cannot retain the
 first file's logical namespace. Native explicitly qualified names are not
-rebased. Facts-cache format 14 rejects older raw facts; extraction semantics 16
+rebased. Facts-cache format 15 rejects older raw facts; extraction semantics 17
 forces graph regeneration for the changed declaration identities.
 
 Tests cover combined/split API agreement, nested declarations, explicit class
@@ -53,3 +52,13 @@ covers all 24 bundled Tier 1 languages and verifies that native names in the
 other languages pass through unchanged. Qualification supplies missing names;
 it does not implement module loading, import resolution, or interprocedural
 receiver/value-flow analysis.
+
+Python uses the same provenance, binding order and logical-path rebasing.
+`pkg/__init__.py` supplies the package prefix `pkg`, so its `outer` and nested
+`inner` declarations are `pkg.outer` and `pkg.outer.inner`. A standalone absolute
+initializer initially uses `__init__` until repository extraction supplies the
+logical package path; a repository-root initializer retains that fallback.
+Explicit native class/method and constructor names are preserved. Combined and
+split extraction APIs, same-stem modules, persistent initializer-cache reuse and
+free/member collisions have regression coverage. The Python ecommerce expected
+facts assert graph qualified names independently from blast display names.

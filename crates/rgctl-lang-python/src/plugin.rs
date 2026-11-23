@@ -3,17 +3,21 @@
 //! Extracts symbols, relationships, and complexity metrics from Python source code
 //! using TreeSitter.
 
-use crate::single_pass::{extract_all_single_pass, python_ast_handlers};
+use crate::single_pass::{
+    extract_all_single_pass, extract_all_single_pass_in_repo, python_ast_handlers,
+};
 use rgctl_plugin_api::{
-    AstHandlerTable, ComplexityMetrics, Error, ExtractAllResult, Field, LanguagePlugin, Parameter,
-    Relation, RelationType, Result, SourceLocation, Symbol, SymbolType, callee_name,
-    complexity_from_metadata, containing_function, infer_python_method_target, parse_with_pool,
+    AstHandlerTable, CallFileIndex, ComplexityMetrics, Error, ExtractAllResult, Field,
+    LanguagePlugin, Parameter, Relation, RelationType, Result, SourceLocation, Symbol, SymbolType,
+    complexity_from_metadata, containing_function, parse_with_pool,
+    push_call_relation_from_indexed,
 };
 use rgctl_plugin_helpers::{
     containing_class_name, extract_decorator_relations, extract_python_class_extends_relations,
     extract_python_import_symbols, python_simple_type_name, record_symbol_spans,
 };
 use rgctl_semantic::type_inference::TypeInferencer;
+use std::borrow::Cow;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -98,27 +102,20 @@ impl PythonPlugin {
             }
         }
 
-        let is_constructor = raw_name == "__init__";
-        let class_name = if is_constructor {
-            self.find_containing_class_name(node, source)
-        } else {
-            None
-        };
-        let (name, qualified_name, metadata) = if is_constructor {
-            let class_name = class_name.unwrap_or_else(|| "object".to_string());
-            (
+        let class_name = self.find_containing_class_name(node, source);
+        let is_constructor = raw_name == "__init__" && class_name.is_some();
+        let (name, qualified_name, metadata) = match class_name {
+            Some(class_name) if is_constructor => (
                 raw_name,
                 Some(format!("{class_name}.<init>")),
-                serde_json::json!({ "language": "python", "is_constructor": true }),
-            )
-        } else if let Some(class_name) = self.find_containing_class_name(node, source) {
-            (
+                serde_json::json!({ "is_constructor": true }),
+            ),
+            Some(class_name) => (
                 raw_name.clone(),
                 Some(format!("{class_name}.{raw_name}")),
-                serde_json::json!({ "language": "python" }),
-            )
-        } else {
-            (raw_name, None, serde_json::json!({ "language": "python" }))
+                serde_json::Value::Null,
+            ),
+            None => (raw_name, None, serde_json::Value::Null),
         };
 
         let mut sym = Symbol {
@@ -146,6 +143,7 @@ impl PythonPlugin {
             modifiers,
             documentation,
             metadata,
+            language: Some(Cow::Borrowed("python")),
             ..Default::default()
         };
         record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
@@ -320,7 +318,8 @@ impl PythonPlugin {
             fields,
             modifiers: vec![],
             documentation: None,
-            metadata: serde_json::json!({ "language": "python" }),
+            metadata: serde_json::Value::Null,
+            language: Some(Cow::Borrowed("python")),
             ..Default::default()
         };
         record_symbol_spans(&mut sym, node, node.child_by_field_name("name"));
@@ -684,6 +683,7 @@ impl PythonPlugin {
         relations: &mut Vec<Relation>,
     ) -> Result<()> {
         const MAX_DEPTH: usize = 2048;
+        let file_path_str = file_path.to_string_lossy();
         let mut stack = vec![(root, 0usize)];
         while let Some((node, depth)) = stack.pop() {
             if depth > MAX_DEPTH {
@@ -693,14 +693,14 @@ impl PythonPlugin {
                 relations.extend(extract_python_class_extends_relations(
                     node,
                     source,
-                    &file_path.to_string_lossy(),
+                    &file_path_str,
                     "python",
                 ));
             }
-            let mut cursor = node.walk();
-            let children: Vec<Node> = node.children(&mut cursor).collect();
-            for child in children.into_iter().rev() {
-                stack.push((child, depth + 1));
+            for i in (0..node.child_count()).rev() {
+                if let Some(child) = node.child(i) {
+                    stack.push((child, depth + 1));
+                }
             }
         }
         Ok(())
@@ -717,14 +717,17 @@ impl PythonPlugin {
         const MAX_DEPTH: usize = 2048;
         let function_symbols: Vec<&Symbol> = symbols
             .iter()
-            .filter(|s| s.symbol_type == SymbolType::Function)
+            .filter(|s| {
+                s.symbol_type == SymbolType::Function
+                    && s.metadata.get("kind").and_then(|v| v.as_str()) != Some("lambda")
+            })
             .collect();
         let class_names: std::collections::HashSet<String> = symbols
             .iter()
             .filter(|s| s.symbol_type == SymbolType::Class)
             .map(|s| s.name.clone())
             .collect();
-        let file_path_str = file_path.to_string_lossy().to_string();
+        let file_path_str = file_path.to_string_lossy();
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
@@ -738,6 +741,7 @@ impl PythonPlugin {
                         .clone()
                         .unwrap_or_else(|| from_fn.name.clone());
                     if let Some(target) = instantiation_target(node, source, &class_names) {
+                        let identity_start = relations.len();
                         relations.push(Relation {
                             from,
                             to: target.clone(),
@@ -751,14 +755,21 @@ impl PythonPlugin {
                             to_type_hint: None,
                             ..Default::default()
                         });
+                        rgctl_plugin_helpers::callable_identity::call(
+                            node,
+                            source,
+                            rgctl_plugin_helpers::callable_identity::Policy::Python,
+                            Some(from_fn),
+                            &mut relations[identity_start..],
+                        );
                     }
                 }
             }
 
-            let mut cursor = node.walk();
-            let children: Vec<Node> = node.children(&mut cursor).collect();
-            for child in children.into_iter().rev() {
-                stack.push((child, depth + 1));
+            for i in (0..node.child_count()).rev() {
+                if let Some(child) = node.child(i) {
+                    stack.push((child, depth + 1));
+                }
             }
         }
         Ok(())
@@ -796,8 +807,12 @@ impl PythonPlugin {
         const MAX_DEPTH: usize = 2048;
         let function_symbols: Vec<&Symbol> = symbols
             .iter()
-            .filter(|s| s.symbol_type == SymbolType::Function)
+            .filter(|s| {
+                s.symbol_type == SymbolType::Function
+                    && s.metadata.get("kind").and_then(|v| v.as_str()) != Some("lambda")
+            })
             .collect();
+        let call_file_index = CallFileIndex::new(file_path, symbols);
         let mut stack = vec![(root, 0usize)];
 
         while let Some((node, depth)) = stack.pop() {
@@ -805,59 +820,33 @@ impl PythonPlugin {
                 continue;
             }
 
-            if node.kind() == "call" {
-                if let Some(from_fn) = containing_function(node, &function_symbols) {
-                    let callee = node
-                        .child_by_field_name("function")
-                        .and_then(|n| callee_name(n, source))
-                        .or_else(|| callee_name(node, source));
-                    if let Some(callee) = callee.filter(|c| !c.is_empty()) {
-                        let from = from_fn
-                            .qualified_name
-                            .clone()
-                            .unwrap_or_else(|| from_fn.name.clone());
-                        let (to_qualified_hint, to_type_hint) =
-                            infer_python_method_target(node, source, symbols, from_fn);
-                        let mut meta = serde_json::json!({ "language": "python" });
-                        if python_call_unresolved_local(node, source) {
-                            meta["unresolved"] = serde_json::Value::Bool(true);
-                        }
-                        let same_file_matches: Vec<_> = symbols
-                            .iter()
-                            .filter(|s| {
-                                s.name == callee
-                                    && s.symbol_type == SymbolType::Function
-                                    && s.location.file == file_path.to_string_lossy()
-                            })
-                            .collect();
-                        let local_target = match same_file_matches.as_slice() {
-                            [only] => only
-                                .qualified_name
-                                .clone()
-                                .unwrap_or_else(|| callee.clone()),
-                            _ => to_qualified_hint.clone().unwrap_or_else(|| callee.clone()),
-                        };
-                        relations.push(Relation {
-                            from,
-                            to: local_target,
-                            relation_type: RelationType::Calls,
-                            location: rgctl_plugin_helpers::python_source_location(
-                                node,
-                                &file_path.to_string_lossy(),
-                            ),
-                            metadata: meta,
-                            to_qualified_hint,
-                            to_type_hint,
-                            ..Default::default()
-                        });
-                    }
-                }
+            if node.kind() == "call"
+                && let Some(from_fn) = containing_function(node, &function_symbols)
+            {
+                let identity_start = relations.len();
+                push_call_relation_from_indexed(
+                    node,
+                    source,
+                    file_path,
+                    symbols,
+                    &call_file_index,
+                    from_fn,
+                    "python",
+                    relations,
+                );
+                rgctl_plugin_helpers::callable_identity::call(
+                    node,
+                    source,
+                    rgctl_plugin_helpers::callable_identity::Policy::Python,
+                    Some(from_fn),
+                    &mut relations[identity_start..],
+                );
             }
 
-            let mut cursor = node.walk();
-            let children: Vec<Node> = node.children(&mut cursor).collect();
-            for child in children.into_iter().rev() {
-                stack.push((child, depth + 1));
+            for i in (0..node.child_count()).rev() {
+                if let Some(child) = node.child(i) {
+                    stack.push((child, depth + 1));
+                }
             }
         }
     }
@@ -902,29 +891,6 @@ pub(crate) fn instantiation_target(
     }
 }
 
-fn python_call_unresolved_local(call: Node, source: &[u8]) -> bool {
-    let Some(func) = call.child_by_field_name("function") else {
-        return false;
-    };
-    if func.kind() == "subscript" {
-        return true;
-    }
-    if func.kind() != "attribute" {
-        return false;
-    }
-    let attr = func.child_by_field_name("attribute");
-    match attr.map(|a| a.kind()) {
-        Some("identifier") => false,
-        Some(kind) => {
-            kind != "identifier"
-                || attr
-                    .and_then(|a| a.utf8_text(source).ok())
-                    .is_some_and(|t| t.starts_with('['))
-        }
-        None => true,
-    }
-}
-
 impl Default for PythonPlugin {
     fn default() -> Self {
         Self::new().expect("Failed to create PythonPlugin")
@@ -946,7 +912,18 @@ impl LanguagePlugin for PythonPlugin {
 
     fn extract_symbols(&self, file_path: &Path, source: &[u8]) -> Result<Vec<Symbol>> {
         let tree = self.parse(file_path, source)?;
-        self.symbols_from_tree(tree.root_node(), source, file_path)
+        let mut symbols = self.symbols_from_tree(tree.root_node(), source, file_path)?;
+        rgctl_plugin_helpers::qualified_names::qualify_python_file(
+            file_path,
+            &mut symbols,
+            &mut [],
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Python,
+            &mut symbols,
+            &mut [],
+        );
+        Ok(symbols)
     }
 
     fn extract_relations(
@@ -956,11 +933,40 @@ impl LanguagePlugin for PythonPlugin {
         symbols: &[Symbol],
     ) -> Result<Vec<Relation>> {
         let tree = self.parse(file_path, source)?;
-        self.relations_from_tree(tree.root_node(), source, file_path, symbols)
+        let root = tree.root_node();
+        let mut relations = self.relations_from_tree(root, source, file_path, symbols)?;
+        let mut sym_copy = symbols.to_vec();
+        rgctl_plugin_helpers::apply_framework_catalog(
+            "python",
+            source,
+            Some(root),
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::qualified_names::qualify_python_file(
+            file_path,
+            &mut sym_copy,
+            &mut relations,
+        );
+        rgctl_plugin_helpers::callable_identity::finish(
+            rgctl_plugin_helpers::callable_identity::Policy::Python,
+            &mut sym_copy,
+            &mut relations,
+        );
+        Ok(relations)
     }
 
     fn extract_all(&self, file_path: &Path, source: &[u8]) -> Result<ExtractAllResult> {
         extract_all_single_pass(self, file_path, source)
+    }
+
+    fn extract_all_in_repo(
+        &self,
+        file_path: &Path,
+        logical_path: Option<&Path>,
+        source: &[u8],
+    ) -> Result<ExtractAllResult> {
+        extract_all_single_pass_in_repo(self, file_path, logical_path, source)
     }
 
     fn declared_ast_handlers(&self) -> Option<&AstHandlerTable> {
@@ -1175,10 +1181,12 @@ def helper():
         let symbols = plugin.extract_symbols(path, source).unwrap();
         let relations = plugin.extract_relations(path, source, &symbols).unwrap();
         assert!(
-            relations
-                .iter()
-                .any(|r| matches!(r.relation_type, RelationType::Calls) && r.to == "helper"),
-            "expected Calls -> helper, got {relations:?}"
+            relations.iter().any(|r| {
+                matches!(r.relation_type, RelationType::Calls)
+                    && r.to == "helper"
+                    && r.to_qualified_hint.as_deref() == Some("test.helper")
+            }),
+            "expected Calls -> helper (hint test.helper), got {relations:?}"
         );
     }
 

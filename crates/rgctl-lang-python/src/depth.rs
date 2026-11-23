@@ -2,6 +2,7 @@
 
 use rgctl_plugin_api::{Field, Relation, RelationType, SourceLocation, Symbol, SymbolType};
 use rgctl_plugin_helpers::record_symbol_spans;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use tree_sitter::Node;
 
@@ -115,14 +116,14 @@ pub fn extract_type_alias_statement(node: Node, source: &[u8], file_path: &str) 
     let right = node
         .child_by_field_name("right")
         .and_then(|n| text(n, source));
-    let mut meta = serde_json::json!({ "language": "python", "kind": "type_alias_statement" });
+    let mut meta = serde_json::json!({ "kind": "type_alias_statement" });
     if let Some(ref ty) = right {
         meta["aliased_type"] = serde_json::Value::String(ty.clone());
     }
     let mut sym = Symbol {
-        name: name.clone(),
+        name,
         symbol_type: SymbolType::TypeAlias,
-        qualified_name: Some(name),
+        qualified_name: None,
         location: loc(node, file_path),
         signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
         return_type: right,
@@ -131,6 +132,7 @@ pub fn extract_type_alias_statement(node: Node, source: &[u8], file_path: &str) 
         modifiers: vec![],
         documentation: None,
         metadata: meta,
+        language: Some(Cow::Borrowed("python")),
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, name_node);
@@ -150,9 +152,9 @@ pub fn extract_simple_binding(
     }
     let name = text(left, source)?;
     let mut sym = Symbol {
-        name: name.clone(),
+        name,
         symbol_type: SymbolType::Variable,
-        qualified_name: Some(name),
+        qualified_name: None,
         location: loc(node, file_path),
         signature: None,
         return_type: None,
@@ -161,9 +163,9 @@ pub fn extract_simple_binding(
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({
-            "language": "python",
             "kind": kind_tag,
         }),
+        language: Some(Cow::Borrowed("python")),
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, Some(left));
@@ -181,9 +183,9 @@ pub fn extract_as_pattern_target(node: Node, source: &[u8], file_path: &str) -> 
     };
     let name = name_node.and_then(|n| text(n, source))?;
     let mut sym = Symbol {
-        name: name.clone(),
+        name,
         symbol_type: SymbolType::Variable,
-        qualified_name: Some(name),
+        qualified_name: None,
         location: loc(node, file_path),
         signature: None,
         return_type: None,
@@ -192,9 +194,9 @@ pub fn extract_as_pattern_target(node: Node, source: &[u8], file_path: &str) -> 
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({
-            "language": "python",
             "kind": "with_as_target",
         }),
+        language: Some(Cow::Borrowed("python")),
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, name_node);
@@ -341,9 +343,9 @@ pub fn extract_named_expression(node: Node, source: &[u8], file_path: &str) -> O
     let name_node = node.child_by_field_name("name")?;
     let name = text(name_node, source)?;
     let mut sym = Symbol {
-        name: name.clone(),
+        name,
         symbol_type: SymbolType::Variable,
-        qualified_name: Some(name),
+        qualified_name: None,
         location: loc(node, file_path),
         signature: node.utf8_text(source).ok().map(|s| s.trim().to_string()),
         return_type: None,
@@ -352,9 +354,9 @@ pub fn extract_named_expression(node: Node, source: &[u8], file_path: &str) -> O
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({
-            "language": "python",
             "kind": "named_expression",
         }),
+        language: Some(Cow::Borrowed("python")),
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, Some(name_node));
@@ -363,8 +365,10 @@ pub fn extract_named_expression(node: Node, source: &[u8], file_path: &str) -> O
 
 /// Standalone / class-bound `lambda` → Function symbol.
 ///
-/// `class_qn` prefixes the qualified name (`ClassName.lambda_name`) when the
-/// lambda appears in a class body.
+/// `class_qn` prefixes the qualified name (`ClassName.lambda_name`) only when a
+/// named `lambda` appears directly in a class body; module/local named lambdas
+/// leave `qualified_name` unset for file/lexical qualification, and anonymous
+/// `<lambda@line:col>` symbols remain unqualified.
 pub fn extract_lambda_symbol(
     node: Node,
     source: &[u8],
@@ -383,12 +387,17 @@ pub fn extract_lambda_symbol(
             None
         }
     });
-    let name = name_node
-        .and_then(|l| text(l, source))
-        .unwrap_or_else(|| format!("<lambda@{}>", node.start_position().row + 1));
-    let qualified_name = match class_qn {
-        Some(c) if !c.is_empty() => Some(format!("{c}.{name}")),
-        _ => Some(name.clone()),
+    let (name, qualified_name) = match name_node.and_then(|l| text(l, source)) {
+        Some(bound) => {
+            let qn = class_qn
+                .filter(|c| !c.is_empty())
+                .map(|c| format!("{c}.{bound}"));
+            (bound, qn)
+        }
+        None => {
+            let pos = node.start_position();
+            (format!("<lambda@{}:{}>", pos.row + 1, pos.column + 1), None)
+        }
     };
     let mut sym = Symbol {
         name,
@@ -402,9 +411,9 @@ pub fn extract_lambda_symbol(
         modifiers: vec![],
         documentation: None,
         metadata: serde_json::json!({
-            "language": "python",
             "kind": "lambda",
         }),
+        language: Some(Cow::Borrowed("python")),
         ..Default::default()
     };
     record_symbol_spans(&mut sym, node, name_node);

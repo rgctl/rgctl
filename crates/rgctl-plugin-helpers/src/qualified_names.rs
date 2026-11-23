@@ -39,10 +39,10 @@ fn is_qualifiable_symbol(s: &Symbol) -> bool {
     is_lexical_scope(s) || matches!(s.symbol_type, SymbolType::Variable | SymbolType::TypeAlias)
 }
 
-/// Whether `name` is a synthetic uncallable callback name (`anonymous` or `anonymous@L...`).
+/// Whether `name` is a synthetic uncallable callback name (`anonymous`, `anonymous@L...`, or `<lambda@...>`).
 #[inline]
 pub fn is_anonymous_callable(name: &str) -> bool {
-    name == "anonymous" || name.starts_with("anonymous@L")
+    name == "anonymous" || name.starts_with("anonymous@L") || name.starts_with("<lambda@")
 }
 
 fn strip_known_ext(file_name: &str) -> &str {
@@ -95,6 +95,34 @@ pub fn qualify_file(
     qualify_file_in_module(path, path, symbols, relations)
 }
 
+/// Python package initializers use their package's logical namespace.
+pub fn qualify_python_file(
+    path: &Path,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
+    qualify_python_file_in_module(path, path, symbols, relations)
+}
+
+/// Fill absent Python names while deriving the module prefix from `module_path`
+/// (`pkg/__init__.py` -> `pkg`).
+pub fn qualify_python_file_in_module(
+    file_path: &Path,
+    module_path: &Path,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
+    let mut module = file_module(module_path);
+    if module_path
+        .file_stem()
+        .is_some_and(|stem| stem == "__init__")
+        && let Some((package, _)) = module.rsplit_once('.')
+    {
+        module.truncate(package.len());
+    }
+    qualify_with_module(file_path, module, symbols, relations)
+}
+
 /// Fill absent names using a sorted lexical scope stack, matching symbol
 /// locations against `file_path` while deriving the module prefix from
 /// `module_path`. Preserves explicit owner names and callable identities.
@@ -104,7 +132,15 @@ pub fn qualify_file_in_module(
     symbols: &mut [Symbol],
     relations: &mut [Relation],
 ) -> Option<Box<str>> {
-    let module = file_module(module_path);
+    qualify_with_module(file_path, file_module(module_path), symbols, relations)
+}
+
+fn qualify_with_module(
+    file_path: &Path,
+    module: String,
+    symbols: &mut [Symbol],
+    relations: &mut [Relation],
+) -> Option<Box<str>> {
     if module.is_empty() {
         return None;
     }
@@ -224,13 +260,21 @@ fn build_qualified_candidate(
 /// Rebase generated names after a raw facts-cache hit (or stem-qualified extract).
 /// Other languages and their native qualified names pass through unchanged.
 pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut ExtractAllResult) {
-    if !matches!(language, "javascript" | "typescript") {
+    if !matches!(language, "javascript" | "typescript" | "python") {
         return;
     }
     let Some(old_context) = result.file_namespace.as_deref().map(str::to_owned) else {
         return;
     };
-    let module = file_module(logical_path);
+    let mut module = file_module(logical_path);
+    if language == "python"
+        && logical_path
+            .file_stem()
+            .is_some_and(|stem| stem == "__init__")
+        && let Some((package, _)) = module.rsplit_once('.')
+    {
+        module.truncate(package.len());
+    }
     if module.is_empty() || module == old_context {
         return;
     }
@@ -333,10 +377,10 @@ pub fn qualify_in_repo(language: &str, logical_path: &Path, result: &mut Extract
 
     result.file_namespace = any_file_origin_kept.then(|| module.into_boxed_str());
     if !cleared_prefixes.is_empty() {
-        let policy = if language == "typescript" {
-            crate::callable_identity::Policy::Typescript
-        } else {
-            crate::callable_identity::Policy::Javascript
+        let policy = match language {
+            "typescript" => crate::callable_identity::Policy::Typescript,
+            "python" => crate::callable_identity::Policy::Python,
+            _ => crate::callable_identity::Policy::Javascript,
         };
         crate::callable_identity::finish(policy, &mut result.symbols, &mut result.relations);
     }
@@ -575,6 +619,8 @@ fn rewrite_endpoints(
             }
         }
         if matches!(relation.relation_type, RelationType::Calls) {
+            let is_unqualified =
+                relation.is_inferred_callable_owner() || relation.to_qualified_hint.is_none();
             let hint = if relation.is_inferred_callable_owner() {
                 // The generic callable pass may have guessed Box.inner for an
                 // unqualified call to a lexical Box.method.inner declaration.
@@ -586,7 +632,28 @@ fn rewrite_endpoints(
                     .as_deref()
                     .unwrap_or(&relation.to)
             };
-            if let Some(Some(target)) = targets.get(hint).copied() {
+            let resolved = match targets.get(hint).copied() {
+                Some(Some(target)) => Some(target),
+                Some(None)
+                    if is_unqualified
+                        && relation.to_type_hint.is_none()
+                        && !hint.contains('.')
+                        && relation
+                            .call_site_byte_len
+                            .is_none_or(|len| usize::from(len) == hint.len()) =>
+                {
+                    resolve_lexical_target(
+                        &relation.from,
+                        &relation.location,
+                        hint,
+                        &sources,
+                        &targets,
+                        symbols,
+                    )
+                }
+                _ => None,
+            };
+            if let Some(target) = resolved {
                 let symbol = &symbols[target];
                 relation
                     .to_qualified_hint
@@ -594,6 +661,40 @@ fn rewrite_endpoints(
             }
         }
     }
+}
+
+fn resolve_lexical_target(
+    caller_qn: &str,
+    call_loc: &SourceLocation,
+    bare_callee: &str,
+    sources: &FxHashMap<(&str, Option<&str>), Candidates>,
+    targets: &FxHashMap<&str, Option<usize>>,
+    symbols: &[Symbol],
+) -> Option<usize> {
+    let mut scope = caller_qn;
+    let mut probe = String::with_capacity(caller_qn.len() + 1 + bare_callee.len());
+    loop {
+        let encloses_call = sources
+            .get(&(scope, None))
+            .and_then(|c| c.find_enclosing(call_loc, symbols))
+            .is_some();
+        if encloses_call {
+            probe.clear();
+            probe.push_str(scope);
+            probe.push('.');
+            probe.push_str(bare_callee);
+            if let Some(&slot) = targets.get(probe.as_str()) {
+                return slot.filter(|&idx| {
+                    symbols[idx].qualified_name_origin != QualifiedNameOrigin::Native
+                });
+            }
+        }
+        match scope.rsplit_once('.') {
+            Some((parent, _)) => scope = parent,
+            None => break,
+        }
+    }
+    None
 }
 
 #[cfg(test)]

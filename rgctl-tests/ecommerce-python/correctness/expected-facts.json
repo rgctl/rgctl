@@ -5,7 +5,78 @@
   "graph": {
     "severity": "required",
     "min_functions": 20,
-    "min_calls_edges": 1
+    "min_calls_edges": 1,
+    "expected_relations": [
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.first.app.module_exercise",
+        "to": "app.module_qualification.first.app.module_helper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.first.app.module_outer",
+        "to": "app.module_qualification.first.app.module_outer.module_inner",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.second.app.module_exercise",
+        "to": "app.module_qualification.second.app.module_helper",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.second.app.module_outer",
+        "to": "app.module_qualification.second.app.module_outer.module_inner",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.pkg.package_entry",
+        "to": "app.module_qualification.pkg.package_entry.package_inner",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "app.module_qualification.Native.exercise",
+        "to": "app.module_qualification.Native.create",
+        "severity": "required"
+      },
+      {
+        "edge": "calls",
+        "from": "Native.method",
+        "to": "app.module_qualification.Native.outside",
+        "severity": "required"
+      }
+    ],
+    "forbidden_edges": [
+      {
+        "from": "app.module_qualification.first.app.module_exercise",
+        "to": "app.module_qualification.second.app.module_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "app.module_qualification.first.app.module_outer",
+        "to": "app.module_qualification.second.app.module_outer.module_inner",
+        "edge_type": "calls"
+      },
+      {
+        "from": "app.module_qualification.second.app.module_exercise",
+        "to": "app.module_qualification.first.app.module_helper",
+        "edge_type": "calls"
+      },
+      {
+        "from": "app.module_qualification.second.app.module_outer",
+        "to": "app.module_qualification.first.app.module_outer.module_inner",
+        "edge_type": "calls"
+      },
+      {
+        "from": "app.module_qualification.Native.exercise",
+        "to": "Native.create",
+        "edge_type": "calls"
+      }
+    ]
   },
   "symbols": {
     "correctnessRoot": {
@@ -16,9 +87,10 @@
       "unique": true,
       "identity": {
         "exact_name": "correctness_root",
-        "canonical_fqn": "correctness_root",
+        "canonical_fqn": "correctness::correctness_root",
         "file_suffix": "correctness.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.correctness.correctness_root"
       },
       "exact_callees": [
         "correctness_mid"
@@ -92,9 +164,10 @@
       "unique": true,
       "identity": {
         "exact_name": "correctness_mid",
-        "canonical_fqn": "correctness_mid",
+        "canonical_fqn": "correctness::correctness_mid",
         "file_suffix": "correctness.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.correctness.correctness_mid"
       },
       "exact_callees": [
         "correctness_leaf"
@@ -146,9 +219,10 @@
       "unique": true,
       "identity": {
         "exact_name": "correctness_leaf",
-        "canonical_fqn": "correctness_leaf",
+        "canonical_fqn": "correctness::correctness_leaf",
         "file_suffix": "correctness.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.correctness.correctness_leaf"
       },
       "exact_callees": [],
       "exact_callers": [
@@ -193,9 +267,10 @@
       "unique": true,
       "identity": {
         "exact_name": "correctness_shared",
-        "canonical_fqn": "correctness_shared",
+        "canonical_fqn": "correctness::correctness_shared",
         "file_suffix": "correctness.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.correctness.correctness_shared"
       },
       "exact_callees": [],
       "exact_callers": [
@@ -223,9 +298,10 @@
       "unique": true,
       "identity": {
         "exact_name": "correctness_diamond",
-        "canonical_fqn": "correctness_diamond",
+        "canonical_fqn": "correctness::correctness_diamond",
         "file_suffix": "correctness.py",
-        "language": "python"
+        "language": "python",
+        "qualified_name": "app.correctness.correctness_diamond"
       },
       "exact_callees": [
         "correctness_left",
@@ -396,12 +472,321 @@
           "correctness_mid"
         ]
       }
+    },
+    "qualification_first_module_helper": {
+      "match": {
+        "name": "module_helper",
+        "file": "app/module_qualification/first/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_helper",
+        "canonical_fqn": "app::module_helper",
+        "file_suffix": "app/module_qualification/first/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.first.app.module_helper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "module_exercise"
+      ]
+    },
+    "qualification_first_module_exercise": {
+      "match": {
+        "name": "module_exercise",
+        "file": "app/module_qualification/first/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_exercise",
+        "canonical_fqn": "app::module_exercise",
+        "file_suffix": "app/module_qualification/first/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.first.app.module_exercise"
+      },
+      "exact_callees": [
+        "module_helper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_module_outer": {
+      "match": {
+        "name": "module_outer",
+        "file": "app/module_qualification/first/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_outer",
+        "canonical_fqn": "app::module_outer",
+        "file_suffix": "app/module_qualification/first/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.first.app.module_outer"
+      },
+      "exact_callees": [
+        "module_inner"
+      ],
+      "exact_callers": []
+    },
+    "qualification_first_module_inner": {
+      "match": {
+        "name": "module_inner",
+        "file": "app/module_qualification/first/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_inner",
+        "canonical_fqn": "module_outer::module_inner",
+        "file_suffix": "app/module_qualification/first/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.first.app.module_outer.module_inner"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "module_outer"
+      ]
+    },
+    "qualification_second_module_helper": {
+      "match": {
+        "name": "module_helper",
+        "file": "app/module_qualification/second/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_helper",
+        "canonical_fqn": "app::module_helper",
+        "file_suffix": "app/module_qualification/second/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.second.app.module_helper"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "module_exercise"
+      ]
+    },
+    "qualification_second_module_exercise": {
+      "match": {
+        "name": "module_exercise",
+        "file": "app/module_qualification/second/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_exercise",
+        "canonical_fqn": "app::module_exercise",
+        "file_suffix": "app/module_qualification/second/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.second.app.module_exercise"
+      },
+      "exact_callees": [
+        "module_helper"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_module_outer": {
+      "match": {
+        "name": "module_outer",
+        "file": "app/module_qualification/second/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_outer",
+        "canonical_fqn": "app::module_outer",
+        "file_suffix": "app/module_qualification/second/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.second.app.module_outer"
+      },
+      "exact_callees": [
+        "module_inner"
+      ],
+      "exact_callers": []
+    },
+    "qualification_second_module_inner": {
+      "match": {
+        "name": "module_inner",
+        "file": "app/module_qualification/second/app.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "module_inner",
+        "canonical_fqn": "module_outer::module_inner",
+        "file_suffix": "app/module_qualification/second/app.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.second.app.module_outer.module_inner"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "module_outer"
+      ]
+    },
+    "qualification_package_entry": {
+      "match": {
+        "name": "package_entry",
+        "file": "app/module_qualification/pkg/__init__.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "package_entry",
+        "canonical_fqn": "pkg::package_entry",
+        "file_suffix": "app/module_qualification/pkg/__init__.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.pkg.package_entry"
+      },
+      "exact_callees": [
+        "package_inner"
+      ],
+      "exact_callers": []
+    },
+    "qualification_package_inner": {
+      "match": {
+        "name": "package_inner",
+        "file": "app/module_qualification/pkg/__init__.py"
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "package_inner",
+        "canonical_fqn": "package_entry::package_inner",
+        "file_suffix": "app/module_qualification/pkg/__init__.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.pkg.package_entry.package_inner"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "package_entry"
+      ]
+    },
+    "qualification_constructor": {
+      "match": {
+        "name": "__init__",
+        "file": "app/module_qualification/Native.py",
+        "line": 2
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "canonical_fqn": "Native::<init>",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "Native.<init>"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_native_create": {
+      "match": {
+        "name": "create",
+        "file": "app/module_qualification/Native.py",
+        "line": 5
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "create",
+        "canonical_fqn": "Native::create",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "Native.create"
+      },
+      "exact_callees": [],
+      "exact_callers": []
+    },
+    "qualification_free_create": {
+      "match": {
+        "name": "create",
+        "file": "app/module_qualification/Native.py",
+        "line": 9
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "create",
+        "canonical_fqn": "Native::create",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.Native.create"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "exercise"
+      ]
+    },
+    "qualification_native_method": {
+      "match": {
+        "name": "method",
+        "file": "app/module_qualification/Native.py",
+        "line": 7
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "method",
+        "canonical_fqn": "Native::method",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "Native.method"
+      },
+      "exact_callees": [
+        "outside"
+      ],
+      "exact_callers": []
+    },
+    "qualification_exercise": {
+      "match": {
+        "name": "exercise",
+        "file": "app/module_qualification/Native.py",
+        "line": 11
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "exercise",
+        "canonical_fqn": "Native::exercise",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.Native.exercise"
+      },
+      "exact_callees": [
+        "create"
+      ],
+      "exact_callers": []
+    },
+    "qualification_outside": {
+      "match": {
+        "name": "outside",
+        "file": "app/module_qualification/Native.py",
+        "line": 13
+      },
+      "severity": "required",
+      "unique": true,
+      "identity": {
+        "exact_name": "outside",
+        "canonical_fqn": "Native::outside",
+        "file_suffix": "app/module_qualification/Native.py",
+        "language": "python",
+        "qualified_name": "app.module_qualification.Native.outside"
+      },
+      "exact_callees": [],
+      "exact_callers": [
+        "method"
+      ]
     }
   },
   "dead_code": {
     "severity": "required",
     "entry_point": "correctness_root",
-    "reachable_with_entry_point": ["correctness_root", "correctness_mid", "correctness_leaf"],
+    "reachable_with_entry_point": [
+      "correctness_root",
+      "correctness_mid",
+      "correctness_leaf"
+    ],
     "must_contain": [
       {
         "name": "correctness_root",
