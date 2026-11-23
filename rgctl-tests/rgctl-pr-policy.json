@@ -7,7 +7,7 @@
   },
   "size_limits": {
     "max_changed_files": 500,
-    "max_scoped_entities": 5000
+    "max_scoped_entities": 10000
   },
   "forbidden_crossings": [],
   "node_domains": {}
