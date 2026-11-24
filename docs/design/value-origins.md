@@ -155,3 +155,36 @@ now preserves that distinction for supported indexed forms.
 Persisted aggregate operands require CFG semantics 9 and RBCP v12. Contexts and
 keys merge; no precise index exclusion, complete container API semantics,
 iteration, comprehension, or mutation-order proof is claimed.
+
+
+### Tier 1 storage coverage
+
+Empty JavaScript/TypeScript object literals have opaque object identity; ordinary
+named literal properties register stores without turning their keys into values.
+The canonical holder-field-to-array-to-receiver example therefore composes without
+a resolver having to invent a nominal type for the holder.
+
+Canonical `correctness/operand_flow.*` fixtures exercise storage with the native
+CFG and query APIs, plus CLI inspection of the persisted operand pools:
+
+- Named field writes/reads: C, C++, C#, Go, Groovy, Java, JavaScript, TypeScript,
+  Kotlin, PHP, Python, Ruby instance variables, Rust, Swift, Scala, Dart, and Lua.
+- Indexed writes/reads: C, C++, C#, Go, Groovy, Java, JavaScript, TypeScript,
+  Kotlin, PHP, Python, Ruby, Rust, Swift, Dart, and Lua. Indices deliberately merge:
+  storing at one index may reach a different index, without aliasing the container.
+- Native literals and indexed reads: Elixir maps and Bash arrays. Puppet array and
+  Scala tuple construction retain opaque aggregate identity, without treating the
+  aggregate as an element's nominal type. The bundled Puppet grammar does not
+  parse variable subscripts; Scala `apply`/`update` use invocation syntax and need
+  a separate canonical collection-API model. Neither is claimed as native indexing.
+- Named variadic containers and actual-to-element transfers: C#, Java, Groovy,
+  Go, JavaScript, TypeScript, Kotlin, PHP, Python (including annotations), Ruby,
+  and Swift. All actual origins remain possible elements; none becomes the
+  nominal type of the container. Other rest/spread conventions retain existing
+  partial binding/operand evidence rather than certifying missing flow.
+
+SQL/HCL are declarative and ERB/Markdown do not provide procedural callable bodies
+for this query. This capability matrix does not qualify arbitrary getters,
+setters, overloaded indexing, reflective storage, library collections, or exact
+mutation order. Ruby's fixture uses native `@slot` storage; a `box.slot` method
+call is not assumed to be a field read.

@@ -264,6 +264,10 @@ struct CfgSpec {
     statements_contain: Option<Vec<String>>,
     operand_formals: Option<usize>,
     operand_calls: Option<usize>,
+    operand_field_writes: Option<usize>,
+    operand_element_writes: Option<usize>,
+    operand_min_elements: Option<usize>,
+    operand_min_collections: Option<usize>,
     operand_returns: Option<usize>,
     operand_min_writes: Option<usize>,
     operand_positional_indices: Option<Vec<u64>>,
@@ -1928,6 +1932,8 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
         ("formals", cs.operand_formals),
         ("calls", cs.operand_calls),
         ("returns", cs.operand_returns),
+        ("field_writes", cs.operand_field_writes),
+        ("element_writes", cs.operand_element_writes),
     ] {
         if let Some(expected) = expected {
             let actual = cfg
@@ -1940,6 +1946,29 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
                 sev,
                 actual == Some(expected),
                 format!("{pool}={actual:?} expected={expected}"),
+            ));
+        }
+    }
+    for (kind, minimum) in [
+        ("Element", cs.operand_min_elements),
+        ("Collection", cs.operand_min_collections),
+    ] {
+        if let Some(minimum) = minimum {
+            let count = cfg
+                .get("operands")
+                .and_then(|o| o.get("expressions"))
+                .and_then(Value::as_array)
+                .map(|expressions| {
+                    expressions
+                        .iter()
+                        .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+                        .count()
+                });
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{kind}"),
+                sev,
+                count.is_some_and(|n| n >= minimum),
+                format!("{kind} count={count:?}, minimum={minimum}"),
             ));
         }
     }

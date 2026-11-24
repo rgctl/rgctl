@@ -2,3 +2,6 @@ int operand_sink(int value) { return value; }
 int operand_relay(int value) { int alias = value; return operand_sink(alias); }
 
 int operand_choice(int flag, int left, int right) { return flag ? left : right; }
+
+int operand_field(struct OperandBox box, int value) { box.slot = value; return box.slot; }
+int operand_element(int box[2], int value) { box[0] = value; return box[1]; }

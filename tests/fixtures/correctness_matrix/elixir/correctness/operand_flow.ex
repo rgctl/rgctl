@@ -7,3 +7,11 @@ defmodule OperandFlow do
   operand_sink(alias_value)
  end
 end
+
+
+defmodule OperandElements do
+ def operand_element(value) do
+  items = %{slot: value}
+  items[:slot]
+ end
+end

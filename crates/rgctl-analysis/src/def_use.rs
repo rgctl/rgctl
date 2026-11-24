@@ -354,10 +354,28 @@ fn collect_assignment_lhs<'a>(
     depth: usize,
     stack: &mut DefUseStack<'a>,
 ) {
+    if depth > AST_WALK_MAX_DEPTH {
+        return;
+    }
     if left.kind() == "directly_assignable_expression"
         && let Some(inner) = left.named_child(0)
     {
         collect_assignment_lhs(inner, source, defined, used, depth + 1, stack);
+        return;
+    }
+    if matches!(left.kind(), "expression_list" | "variable_list") {
+        for child in left.named_children(&mut left.walk()) {
+            collect_assignment_lhs(child, source, defined, used, depth + 1, stack);
+        }
+        return;
+    }
+    if let Some(base) = crate::operands::native_element_base(left) {
+        stack.push((base, false, depth + 1));
+        for child in left.named_children(&mut left.walk()) {
+            if child.id() != base.id() {
+                stack.push((child, false, depth + 1));
+            }
+        }
         return;
     }
     if is_field_access_kind(left.kind()) {
@@ -367,7 +385,14 @@ fn collect_assignment_lhs<'a>(
         collect_field_access_base_uses(left, source, used, stack, depth);
     } else if matches!(
         left.kind(),
-        "subscript_expression" | "subscript" | "index_expression" | "array_access"
+        "subscript_expression"
+            | "subscript"
+            | "index_expression"
+            | "array_access"
+            | "element_access_expression"
+            | "element_reference"
+            | "bracket_index_expression"
+            | "assignable_expression"
     ) {
         // Indexed assignment mutates an element, not the variable holding the
         // container. Both container and selector are reads at this position.
@@ -428,6 +453,17 @@ fn collect_def_use_node<'a>(
     stack: &mut DefUseStack<'a>,
 ) {
     if depth > AST_WALK_MAX_DEPTH {
+        return;
+    }
+    if node.kind() == "call_expression"
+        && let Some(base) = crate::operands::native_element_base(node)
+    {
+        stack.push((base, false, depth + 1));
+        for child in node.named_children(&mut node.walk()) {
+            if child.id() != base.id() {
+                stack.push((child, false, depth + 1));
+            }
+        }
         return;
     }
     let kind = node.kind();

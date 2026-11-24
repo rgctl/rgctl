@@ -13,3 +13,12 @@ end
 function OperandSelf:operand_instance(other)
  return self:perform(other)
 end
+
+function operand_field(box, value)
+ box.slot = value
+ return box.slot
+end
+function operand_element(box, value)
+ box[0] = value
+ return box[1]
+end

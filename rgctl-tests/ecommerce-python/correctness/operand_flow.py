@@ -9,3 +9,16 @@ def operand_member(value, other):
 
 def operand_choice(flag, left, right):
     return left if flag else right
+
+def operand_field(box, value):
+    box.slot = value
+    return box.slot
+def operand_element(box, value):
+    box[0] = value
+    return box[1]
+
+def operand_rest(*values: object):
+ return values[0]
+
+def operand_rest_relay(value):
+ return operand_rest(value)

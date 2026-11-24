@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[path = "operand_lowering.rs"]
 mod lowering;
-pub(crate) use lowering::{local_write_sources, lower_function_operands};
+pub(crate) use lowering::{local_write_sources, lower_function_operands, native_element_base};
 
 #[cfg(test)]
 #[path = "operand_tests.rs"]

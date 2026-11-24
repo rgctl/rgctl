@@ -6,3 +6,6 @@ class OperandSelf { def operand_instance(other: Int): Int = { return this.perfor
 
 
 object OperandChoice { def operand_choice(flag: Boolean, left: Any, right: Any): Any = { return if (flag) left else right } }
+
+object OperandStorage { def operand_field(box: OperandBox, value: Any): Any = { box.slot = value; return box.slot } }
+object OperandElements { def operand_container(value: Any): (Any, Any) = { return (value, value) } }

@@ -7,3 +7,6 @@ class OperandSelf { public: int operand_instance(int other) { return this->perfo
 
 
 int operand_choice(bool flag, int left, int right) { return flag ? left : right; }
+
+int operand_field(OperandBox box, int value) { box.slot = value; return box.slot; }
+int operand_element(int box[2], int value) { box[0] = value; return box[1]; }

@@ -406,3 +406,218 @@ fn unsupported_parameter_patterns_do_not_renumber_later_formals() {
         );
     }
 }
+
+#[test]
+fn storage_origins_cross_native_fields_and_elements_for_tier1() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_operand_cases.json"
+    ))
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let language = case["language"].as_str().unwrap();
+        let source = std::fs::read_to_string(root.join(case["file"].as_str().unwrap())).unwrap();
+        assert_eq!(
+            source.contains("operand_field"),
+            !matches!(language, "puppet" | "elixir" | "bash"),
+            "{language}: field fixture coverage"
+        );
+        assert!(
+            source.contains("operand_element") || source.contains("operand_container"),
+            "{language}: aggregate fixture coverage"
+        );
+        for function in [
+            "operand_field",
+            "operand_element",
+            "operand_container",
+            "operand_box",
+        ] {
+            if !source.contains(function) {
+                continue;
+            }
+            let cfg = build_cfg_for_function(language, &source, function).unwrap();
+            let mut backend = MemoryBackend::new();
+            let mut node = Node::new(NodeType::Function, function);
+            node.id = Uuid::from_u128(100);
+            backend.insert_node(node.clone()).unwrap();
+            let seeds: Vec<_> = cfg
+                .operands
+                .formals
+                .iter()
+                .filter(|f| matches!(f.kind, FormalKind::Positional(_) | FormalKind::Receiver))
+                .enumerate()
+                .map(|(i, f)| OriginSeed {
+                    value: ValueRef {
+                        function: node.id,
+                        expression: f.value,
+                    },
+                    type_id: Some(Uuid::from_u128(1000 + i as u128)),
+                })
+                .collect();
+            let outputs: Vec<_> = if language == "bash" {
+                cfg.operands.arguments.iter().map(|a| a.value).collect()
+            } else {
+                cfg.operands
+                    .returns
+                    .iter()
+                    .flat_map(|r| r.values.slice(&cfg.operands.inputs).unwrap())
+                    .copied()
+                    .collect()
+            };
+            let expected = if function == "operand_container" {
+                None
+            } else {
+                seeds.last().map(|s| s.type_id).unwrap_or(None)
+            };
+            let partial =
+                cfg.operands.status != OperandStatus::Captured || !cfg.operands.valid_references();
+            let debug = format!("{:#?}", cfg.operands);
+            let icfg =
+                InterproceduralCFG::from_cfg_archive(&backend, HashMap::from([(node.id, cfg)]))
+                    .unwrap();
+            let result = OriginAnalysis::build(&icfg, &seeds, &[], &[], OriginLimits::default());
+            let actual: std::collections::BTreeSet<_> = outputs
+                .into_iter()
+                .flat_map(|expression| {
+                    result.origins(ValueRef {
+                        function: node.id,
+                        expression,
+                    })
+                })
+                .map(|o| result.seeds[o.0 as usize].type_id)
+                .collect();
+            if partial || seeds.is_empty() || actual != [expected].into_iter().collect() {
+                let tree =
+                    crate::language_profile::parse_source(language, source.as_bytes()).unwrap();
+                failures.push(format!("{language} {function}: expected {expected:?}, got {actual:?}; partial={partial}\n{debug}\n{}",tree.root_node().to_sexp()));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn native_variadic_formals_keep_containers_distinct_from_actual_elements() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_operand_cases.json"
+    ))
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let language = case["language"].as_str().unwrap();
+        let source = std::fs::read_to_string(root.join(case["file"].as_str().unwrap())).unwrap();
+        assert_eq!(
+            source.contains("operand_rest"),
+            matches!(
+                language,
+                "csharp"
+                    | "java"
+                    | "groovy"
+                    | "go"
+                    | "javascript"
+                    | "typescript"
+                    | "python"
+                    | "php"
+                    | "ruby"
+                    | "kotlin"
+                    | "swift"
+            ),
+            "{language}: variadic fixture coverage"
+        );
+        if !source.contains("operand_rest") {
+            continue;
+        }
+        let cfg = build_cfg_for_function(language, &source, "operand_rest").unwrap();
+        let rest = cfg
+            .operands
+            .formals
+            .iter()
+            .find(|f| f.kind == FormalKind::VariadicPositional);
+        if rest.is_none() {
+            let tree = crate::language_profile::parse_source(language, source.as_bytes()).unwrap();
+            failures.push(format!(
+                "{language}: missing rest formal: {:#?}\n{}",
+                cfg.operands,
+                tree.root_node().to_sexp()
+            ));
+            continue;
+        }
+        let formal = rest.unwrap().value;
+        let outputs: Vec<_> = cfg
+            .operands
+            .returns
+            .iter()
+            .flat_map(|r| r.values.slice(&cfg.operands.inputs).unwrap())
+            .copied()
+            .collect();
+        let mut backend = MemoryBackend::new();
+        let mut node = Node::new(NodeType::Function, "operand_rest");
+        node.id = Uuid::from_u128(100);
+        backend.insert_node(node.clone()).unwrap();
+        let caller_cfg = build_cfg_for_function(language, &source, "operand_rest_relay").unwrap();
+        let actual = caller_cfg
+            .operands
+            .formals
+            .iter()
+            .find(|f| f.kind == FormalKind::Positional(0))
+            .unwrap()
+            .value;
+        let site = caller_cfg.operands.calls.iter().position(|c| matches!(caller_cfg.operands.expressions[c.callee.0 as usize].kind, ExpressionKind::Name(n) | ExpressionKind::Member(n) if caller_cfg.operands.operand_name(n) == Some("operand_rest"))).unwrap();
+        let mut caller = Node::new(NodeType::Function, "operand_rest_relay");
+        caller.id = Uuid::from_u128(101);
+        backend.insert_node(caller.clone()).unwrap();
+        let icfg = InterproceduralCFG::from_cfg_archive(
+            &backend,
+            HashMap::from([(node.id, cfg), (caller.id, caller_cfg)]),
+        )
+        .unwrap();
+        let seed = OriginSeed {
+            value: ValueRef {
+                function: caller.id,
+                expression: actual,
+            },
+            type_id: Some(Uuid::from_u128(1000)),
+        };
+        let result = OriginAnalysis::build(
+            &icfg,
+            &[seed],
+            &[InvocationTarget {
+                call: CallRef {
+                    caller: caller.id,
+                    site: CallSiteId(site as u32),
+                },
+                callee: node.id,
+                receiver: ReceiverSupply::None,
+            }],
+            &[],
+            OriginLimits::default(),
+        );
+        let origins = result.origins(ValueRef {
+            function: node.id,
+            expression: formal,
+        });
+        let actual: std::collections::BTreeSet<_> = outputs
+            .into_iter()
+            .flat_map(|expression| {
+                result.origins(ValueRef {
+                    function: node.id,
+                    expression,
+                })
+            })
+            .map(|o| result.seeds[o.0 as usize].type_id)
+            .collect();
+        if origins.is_empty()
+            || origins
+                .iter()
+                .any(|o| result.seeds[o.0 as usize].type_id.is_some())
+            || actual != [seed.type_id].into_iter().collect()
+        {
+            failures.push(format!(
+                "{language}: invalid rest container/element flow: {result:#?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -20,3 +20,10 @@ func operand_switch(value any) any {
 func operand_member(value Receiver, other int) int { return value.perform(other) }
 
 func operand_choice(flag bool, left any, right any) any { if flag { return left }; return right }
+
+func operand_field(box OperandBox, value any) any { box.slot = value; return box.slot }
+func operand_element(box []any, value any) any { box[0] = value; return box[1] }
+
+func operand_rest(values ...any) any { return values[0] }
+
+func operand_rest_relay(value any) any { return operand_rest(value) }

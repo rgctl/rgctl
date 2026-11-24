@@ -33,6 +33,18 @@
     ]
   },
   "symbols": {
+    "operand_container": {
+      "match": {
+        "name": "operand_container"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 0,
+        "operand_min_collections": 1,
+        "operand_element_writes": 0
+      }
+    },
     "operand_relay": {
       "match": {
         "name": "operand_relay"
