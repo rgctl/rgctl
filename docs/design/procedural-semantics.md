@@ -9,9 +9,9 @@ before their blocks are decoded. Derived adjacency and `local_types` remain
 transient. Older unversioned CFGs and incompatible revisions must be rebuilt;
 they are not silently accepted as current analysis.
 
-The procedural archive is **RBCP v9**. It retains the v3 indexed footer layout
+The procedural archive is **RBCP v10**. It retains the v3 indexed footer layout
 (`TOC3`, 32-byte entries) while its record payloads contain versioned CFGs and
-[function operand pools](function-operands.md). CFG semantics revision is 6. Typed formal entry definitions seed local reaching
+[function operand pools](function-operands.md). CFG semantics revision is 7. Typed formal entry definitions seed local reaching
 definitions and lexical scope; artifacts without them must be rebuilt.
 Preencoded incremental writes preserve records only from the current archive
 format; old records cannot be copied under a new header without rebuilding.

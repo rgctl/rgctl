@@ -512,9 +512,28 @@ impl Binder<'_> {
                 self.record_binding_diagnostic(BindingDiagnostic::InvalidOperand);
                 continue;
             };
+            let remaining = if self.callee.language == OperandLanguage::Bash {
+                positional.partition_point(|&(position, _)| (position as usize) < cursor)
+            } else {
+                cursor
+            };
             match argument.kind {
+                ArgumentKind::Positional
+                    if self.callee.language == OperandLanguage::Bash && !uncertain_positions =>
+                {
+                    if let Ok(index) = positional
+                        .binary_search_by_key(&u32_index(cursor)?, |&(position, _)| position)
+                    {
+                        let formal = positional[index].1;
+                        self.emit(source, formal, TransferKind::ActualToFormal);
+                        assigned[formal] = true;
+                    }
+                    // Shell functions accept unused arguments. Captured parameters
+                    // can be sparse (`$2` without `$1`); never compact their slots.
+                    cursor += 1;
+                }
                 ArgumentKind::Positional if uncertain_positions => {
-                    for &(_, formal) in &positional[cursor..] {
+                    for &(_, formal) in &positional[remaining..] {
                         if self.limited {
                             break;
                         }
@@ -580,7 +599,7 @@ impl Binder<'_> {
                 }
                 ArgumentKind::SpreadPositional => {
                     self.record_binding_diagnostic(BindingDiagnostic::PositionalSpread);
-                    for &(_, formal) in &positional[cursor..] {
+                    for &(_, formal) in &positional[remaining..] {
                         if self.limited {
                             break;
                         }

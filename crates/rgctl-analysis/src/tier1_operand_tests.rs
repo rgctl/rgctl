@@ -328,3 +328,81 @@ fn native_fixture_inventory_covers_all_applicable_tier1_languages() {
     }
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn sparse_shell_formals_keep_their_actual_argument_positions() {
+    let source =
+        include_str!("../../../tests/fixtures/correctness_matrix/bash/correctness/operand_flow.sh");
+    let caller = build_cfg_for_function("bash", source, "operand_sparse_caller").unwrap();
+    let callee = build_cfg_for_function("bash", source, "operand_sparse").unwrap();
+    assert_eq!(callee.operands.formals.len(), 1);
+    assert_eq!(callee.operands.formals[0].kind, FormalKind::Positional(1));
+    let supplied = caller.operands.formals[0].value;
+    let ignored = caller.operands.calls[0]
+        .arguments
+        .slice(&caller.operands.arguments)
+        .unwrap()[0]
+        .value;
+    let target_value = callee.operands.formals[0].value;
+    let mut backend = MemoryBackend::new();
+    let mut from = Node::new(NodeType::Function, "operand_sparse_caller");
+    from.id = Uuid::from_u128(1);
+    let mut to = Node::new(NodeType::Function, "operand_sparse");
+    to.id = Uuid::from_u128(2);
+    backend.insert_node(from.clone()).unwrap();
+    backend.insert_node(to.clone()).unwrap();
+    let icfg = InterproceduralCFG::from_cfg_archive(
+        &backend,
+        HashMap::from([(from.id, caller), (to.id, callee)]),
+    )
+    .unwrap();
+    let seeds = [(supplied, 10), (ignored, 11)].map(|(expression, tag)| OriginSeed {
+        value: ValueRef {
+            function: from.id,
+            expression,
+        },
+        type_id: Uuid::from_u128(tag),
+    });
+    let target = InvocationTarget {
+        call: CallRef {
+            caller: from.id,
+            site: CallSiteId(0),
+        },
+        callee: to.id,
+        receiver: ReceiverSupply::None,
+    };
+    let result = OriginAnalysis::build(&icfg, &seeds, &[target], &[], OriginLimits::default());
+    let origins = result.origins(ValueRef {
+        function: to.id,
+        expression: target_value,
+    });
+    assert_eq!(origins.len(), 1, "{result:#?}");
+    assert_eq!(
+        result.seeds[origins[0].0 as usize].type_id,
+        Uuid::from_u128(10)
+    );
+}
+
+#[test]
+fn unsupported_parameter_patterns_do_not_renumber_later_formals() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (language, extension) in [("javascript", "js"), ("typescript", "ts")] {
+        let source = std::fs::read_to_string(root.join(format!(
+            "rgctl-tests/ecommerce-{language}/correctness/operand_flow.{extension}"
+        )))
+        .unwrap();
+        let cfg = build_cfg_for_function(language, &source, "operand_pattern").unwrap();
+        assert_eq!(cfg.operands.formals.len(), 1, "{language}");
+        assert_eq!(
+            cfg.operands.formals[0].kind,
+            FormalKind::Positional(1),
+            "{language}"
+        );
+        assert!(
+            cfg.operands
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == crate::operands::OperandDiagnosticKind::ParameterPattern)
+        );
+    }
+}

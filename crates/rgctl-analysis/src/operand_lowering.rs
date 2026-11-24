@@ -544,7 +544,9 @@ impl<'a> Lowerer<'a> {
             self.parameter(param, kind)?;
             if matches!(kind, FormalKind::Positional(_)) {
                 position = position
-                    .checked_add(checked_operand_index(self.facts.formals.len() - before)?)
+                    .checked_add(checked_operand_index(
+                        (self.facts.formals.len() - before).max(1),
+                    )?)
                     .ok_or_else(|| Error::SerdeError("formal index overflow".into()))?;
             }
             if language == OperandLanguage::Python && rest {

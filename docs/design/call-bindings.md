@@ -101,3 +101,5 @@ local and invocation facts and activates supplied canonical member candidates.
 It merges caller alternatives, reports coverage gaps, and preserves transfer
 provenance. Matched-context exclusions and interprocedural taint verdicts remain
 separate work; the query cannot certify absence of impact.
+
+Shell positional bindings retain numeric slots even when only later parameters are used. Unsupported declaration patterns reserve their source argument position and keep partial-coverage diagnostics.

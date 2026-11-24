@@ -266,6 +266,7 @@ struct CfgSpec {
     operand_calls: Option<usize>,
     operand_returns: Option<usize>,
     operand_min_writes: Option<usize>,
+    operand_positional_indices: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1941,6 +1942,28 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
                 format!("{pool}={actual:?} expected={expected}"),
             ));
         }
+    }
+    if let Some(expected) = &cs.operand_positional_indices {
+        let actual: Option<Vec<_>> = cfg
+            .get("operands")
+            .and_then(|o| o.get("formals"))
+            .and_then(Value::as_array)
+            .map(|formals| {
+                formals
+                    .iter()
+                    .filter_map(|f| {
+                        f.get("kind")
+                            .and_then(|k| k.get("Positional").or_else(|| k.get("PositionalOnly")))
+                            .and_then(Value::as_u64)
+                    })
+                    .collect()
+            });
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_positional_indices"),
+            sev,
+            actual.as_ref() == Some(expected),
+            format!("positions={actual:?} expected={expected:?}"),
+        ));
     }
     if let Some(min) = cs.operand_min_writes {
         let actual = cfg

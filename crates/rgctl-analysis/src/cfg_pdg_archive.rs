@@ -14,7 +14,8 @@
 //! - **v6**: typed formal entry definitions and seeded local scope.
 //! - **v7**: exact local expression/statement and read/write bindings.
 //! - **v8**: typed conditional values and successful assertions.
-//! - **v9** (current): projected multi-value assignment operands.
+//! - **v9**: projected multi-value assignment operands.
+//! - **v10** (current): sparse positional and unsupported-pattern slot semantics.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -37,8 +38,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v9 = projected assignment operands).
-pub const ARCHIVE_VERSION: u32 = 9;
+/// Current archive format (v10 = exact declared positional slots).
+pub const ARCHIVE_VERSION: u32 = 10;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

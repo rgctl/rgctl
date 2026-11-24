@@ -95,6 +95,22 @@
     ]
   },
   "symbols": {
+    "operand_pattern": {
+      "match": {
+        "name": "operand_pattern"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 0,
+        "operand_returns": 1,
+        "operand_min_writes": 1,
+        "operand_positional_indices": [
+          1
+        ]
+      }
+    },
     "operand_relay": {
       "match": {
         "name": "operand_relay"

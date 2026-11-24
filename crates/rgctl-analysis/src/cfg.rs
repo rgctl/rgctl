@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 mod revision_tests;
 
 /// Procedural lowering semantics. Bump when unchanged source must be reanalyzed.
-pub const CFG_SEMANTICS_VERSION: u32 = 6;
+pub const CFG_SEMANTICS_VERSION: u32 = 7;
 
 const fn cfg_revision_tag() -> [u8; 8] {
     let version = CFG_SEMANTICS_VERSION.to_le_bytes();

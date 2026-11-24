@@ -57,8 +57,8 @@ effects, callable capture and framework semantics remain separate work.
 
 ## Persistence and cache reuse
 
-Operand pools persist with the CFG in **RBCP v7**, retaining the existing indexed
-footer layout. CFG semantics revision is **4**; earlier records and index keys
+Operand pools persist with the CFG in **RBCP v10**, retaining the existing indexed
+footer layout. CFG semantics revision is **7**; earlier records and index keys
 must be rebuilt. Deserialization validates operand indices and ranges. Native
 tests exercise fresh trees, bincode round trips, mmap archive reads and malformed
 references.
