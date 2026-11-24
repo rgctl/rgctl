@@ -39,6 +39,32 @@
   ]
   },
   "symbols": {
+    "operand_instance": {
+      "match": {
+        "name": "operand_instance"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_min_writes": 2
+      }
+    },
+    "operand_relay": {
+      "match": {
+        "name": "operand_relay"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_min_writes": 2
+      }
+    },
     "correctnessLeaf": {
       "match": {
         "name": "correctnessLeaf",

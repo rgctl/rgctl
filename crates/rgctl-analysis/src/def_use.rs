@@ -158,6 +158,8 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "subscript_expression",
     "super_formal_parameter",
     "test_pattern",
+    "this",
+    "self",
     "top_level_variable_declaration",
     "tuple_pattern",
     "tuple_struct_pattern",
@@ -243,7 +245,7 @@ fn is_field_access_kind(kind: &str) -> bool {
             | "selector_expression"
             | "attribute"
             // Kotlin: `order.status` / `this.status` (expression + identifier children).
-            | "navigation_expression"
+            | "navigation_expression" | "method_index_expression" | "dot_index_expression"
     )
 }
 
@@ -321,9 +323,24 @@ fn collect_field_access_base_uses<'a>(
 ) {
     if let Some(object) = node
         .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("operand"))
         .or_else(|| node.child_by_field_name("argument"))
         .or_else(|| node.child_by_field_name("value"))
         .or_else(|| node.child_by_field_name("expression"))
+        .or_else(|| node.child_by_field_name("target"))
+        .or_else(|| node.child_by_field_name("table"))
+        .or_else(|| {
+            if node.kind() == "navigation_expression" {
+                node.named_child(0)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|n| matches!(n.kind(), "this" | "self"))
+        })
     {
         stack.push((object, false, depth + 1));
     }
@@ -740,9 +757,8 @@ fn collect_def_use_node<'a>(
                 if child.is_named() {
                     if is_def_target {
                         collect_pattern_defs(child, source, defined, depth + 1);
-                    } else {
-                        stack.push((child, false, depth + 1));
                     }
+                    stack.push((child, false, depth + 1));
                 }
             }
         }
@@ -752,8 +768,23 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // Kotlin local/member `val x = expr` / `var (a, b) = expr`
+        "val_definition" | "var_definition" => {
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                stack.push((value, false, depth + 1));
+            }
+        }
+        // Kotlin and Swift local/member declarations.
         "property_declaration" => {
+            if let Some(pattern) = node.child_by_field_name("name") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+                if let Some(value) = node.child_by_field_name("value") {
+                    stack.push((value, false, depth + 1));
+                }
+                return;
+            }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if !child.is_named() {
@@ -934,6 +965,14 @@ fn collect_def_use_node<'a>(
                 if let Some(def) = field_access_def(node, source) {
                     used.insert(def.name());
                 }
+            }
+        }
+
+        // Language-defined receiver tokens are values, even though Java/ECMA
+        // `this` and Rust `self` are not ordinary identifier nodes.
+        "this" | "self" | "this_expression" | "self_expression" if !is_def_target => {
+            if let Ok(name) = node.utf8_text(source) {
+                used.insert(name.to_string());
             }
         }
 

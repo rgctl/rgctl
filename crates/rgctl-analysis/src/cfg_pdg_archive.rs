@@ -9,7 +9,13 @@
 //! - **v3**: contiguous payloads + **8-byte-aligned sorted TOC footer**
 //!   (`Uuid`, `u64` offset, `u32` len, `u32` flags) so open is `O(1)` and a single
 //!   record is binary-search + zero-copy slice deserialize.
-//! - **v4** (current): same indexed layout, with versioned CFG semantics in records.
+//! - **v4**: same indexed layout, with versioned CFG semantics in records.
+//! - **v5**: same indexed layout, with structured function operand pools.
+//! - **v6**: typed formal entry definitions and seeded local scope.
+//! - **v7**: exact local expression/statement and read/write bindings.
+//! - **v8**: typed conditional values and successful assertions.
+//! - **v9**: projected multi-value assignment operands.
+//! - **v10** (current): sparse positional and unsupported-pattern slot semantics.
 
 use crate::cfg::ControlFlowGraph;
 use crate::hash_maps::FxHashMap;
@@ -32,8 +38,8 @@ static NEXT_ARCHIVE_TMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Magic bytes for CFG/PDG archive files (`RBCP`).
 pub const ARCHIVE_MAGIC: [u8; 4] = *b"RBCP";
-/// Current archive format (v4 = footer TOC and versioned CFG semantics).
-pub const ARCHIVE_VERSION: u32 = 4;
+/// Current archive format (v10 = exact declared positional slots).
+pub const ARCHIVE_VERSION: u32 = 10;
 /// Legacy monolithic bincode payload.
 pub const ARCHIVE_VERSION_V1: u32 = 1;
 /// Legacy header-TOC format.

@@ -182,13 +182,61 @@ pub fn criterion_for_parameter(
     let cfg = icfg
         .get_cfg(callee_id)
         .ok_or_else(|| rgctl_error::Error::NotFound(format!("cfg {callee_id}")))?;
+    // Native scoped anchors distinguish formal entries from actual body uses.
+    // Do not let HashMap iteration choose an entry definition as the "first use".
+    if let Some(formal) = cfg
+        .operands
+        .formals
+        .iter()
+        .find(|formal| cfg.operands.operand_name(formal.name) == Some(param_name))
+        && let Some(entry) = cfg
+            .operands
+            .local_writes
+            .iter()
+            .find(|write| write.value == Some(formal.value))
+    {
+        let line = cfg
+            .operands
+            .local_uses
+            .iter()
+            .filter(|usage| usage.slot == entry.slot)
+            .filter_map(|usage| {
+                let statement = cfg
+                    .blocks
+                    .get(&usage.statement.block)?
+                    .statements
+                    .get(usage.statement.index as usize)?;
+                Some(statement.line)
+            })
+            .min()
+            .or_else(|| {
+                cfg.blocks
+                    .get(&entry.statement.block)
+                    .and_then(|b| b.statements.get(entry.statement.index as usize))
+                    .map(|s| s.line)
+            });
+        if let Some(line) = line {
+            return Ok(SliceCriterion {
+                variable: param_name.to_owned(),
+                line,
+            });
+        }
+    }
     let source = source_for_function(backend, source_files, callee_id)?;
     let pdg = ProgramDependenceGraph::build(cfg, source.as_bytes())?;
 
     let line = pdg
         .nodes
         .values()
-        .find(|n| n.used_vars.contains(param_name) || n.defined_vars.contains(param_name))
+        .filter(|n| n.used_vars.contains(param_name) || n.defined_vars.contains(param_name))
+        .min_by_key(|n| {
+            (
+                !n.used_vars.contains(param_name),
+                n.statement.line,
+                n.block.0,
+                n.id,
+            )
+        })
         .map(|n| n.statement.line)
         .unwrap_or(1);
 

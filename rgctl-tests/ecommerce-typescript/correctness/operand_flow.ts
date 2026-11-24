@@ -1,0 +1,8 @@
+function operand_sink(value: number): number { return value; }
+function operand_relay(value: number): number { const alias = value; return operand_sink(alias); }
+
+function operand_member(value: Receiver, other: number): number { return value.perform(other); }
+
+function operand_choice(flag: boolean, left: object, right: object): object { return flag ? left : right; }
+
+function operand_pattern({ ignored }: { ignored: number }, value: object): object { return value; }
