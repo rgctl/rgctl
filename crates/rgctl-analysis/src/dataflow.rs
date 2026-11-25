@@ -223,8 +223,11 @@ pub fn compute_reaching_definitions(
 
 fn collect_block_definitions(block: &BasicBlock, pdg: &ProgramDependenceGraph) -> Vec<Definition> {
     let mut defs = Vec::new();
-    for (idx, _stmt) in block.statements.iter().enumerate() {
-        if let Some(pdg_node) = pdg.find_node_by_block_and_index(block.id, idx) {
+    for (idx, stmt) in block.statements.iter().enumerate() {
+        // Archive restoration can rebuild auxiliary block indexes in map order.
+        // The CFG position and deterministic node identity remain canonical.
+        let id = crate::pdg::deterministic_pdg_node_id(block.id, idx, stmt.line, &stmt.text);
+        if let Some(pdg_node) = pdg.nodes.get(&id) {
             for var in &pdg_node.defined_vars {
                 defs.push(Definition {
                     variable: var.clone(),

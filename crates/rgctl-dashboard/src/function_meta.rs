@@ -249,6 +249,7 @@ mod tests {
                 function_id: id,
                 stable_key: key,
                 code_hash: "hash".into(),
+                source_location: None,
                 flow_count: 0,
                 vulnerable_count: 0,
             },

@@ -23,6 +23,8 @@ pub enum CanonicalStatementKind {
     Decl,
     /// Return statement.
     Return,
+    /// Synthetic formal entry definition.
+    Parameter,
     /// Other unclassified expression or statement.
     Other,
 }
@@ -33,6 +35,7 @@ impl CanonicalStatementKind {
         match stmt.kind {
             StatementKind::Return => Self::Return,
             StatementKind::Declaration => Self::Decl,
+            StatementKind::Parameter(_) => Self::Parameter,
             StatementKind::Assignment => Self::Assign,
             StatementKind::FunctionCall => Self::Call,
             StatementKind::Branch => {
@@ -84,6 +87,7 @@ impl CanonicalStatementKind {
             Self::Decl => b"STMT:DECL",
             Self::Return => b"STMT:RETURN",
             Self::Other => b"STMT:OTHER",
+            Self::Parameter => b"STMT:PARAMETER",
         }
     }
 }
