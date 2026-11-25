@@ -262,6 +262,19 @@ struct CfgSpec {
     min_edges: Option<usize>,
     exact_edge_kinds: Option<Vec<String>>,
     statements_contain: Option<Vec<String>>,
+    operand_formals: Option<usize>,
+    operand_yields: Option<usize>,
+    operand_generator: Option<bool>,
+    operand_awaits: Option<usize>,
+    operand_channel_types: Option<usize>,
+    operand_calls: Option<usize>,
+    operand_field_writes: Option<usize>,
+    operand_element_writes: Option<usize>,
+    operand_min_elements: Option<usize>,
+    operand_min_collections: Option<usize>,
+    operand_returns: Option<usize>,
+    operand_min_writes: Option<usize>,
+    operand_positional_indices: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1919,6 +1932,121 @@ fn check_cfg(sid: &str, cs: &CfgSpec, cfg: &Value) -> Vec<CheckResult> {
         .and_then(|n| n.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
+    for (pool, expected) in [
+        ("formals", cs.operand_formals),
+        ("calls", cs.operand_calls),
+        ("returns", cs.operand_returns),
+        ("yields", cs.operand_yields),
+        ("field_writes", cs.operand_field_writes),
+        ("element_writes", cs.operand_element_writes),
+    ] {
+        if let Some(expected) = expected {
+            let actual = cfg
+                .get("operands")
+                .and_then(|o| o.get(pool))
+                .and_then(Value::as_array)
+                .map(Vec::len);
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{pool}"),
+                sev,
+                actual == Some(expected),
+                format!("{pool}={actual:?} expected={expected}"),
+            ));
+        }
+    }
+    if let Some(expected) = cs.operand_generator {
+        let actual = cfg
+            .get("operands")
+            .and_then(|o| o.get("generator"))
+            .and_then(Value::as_bool);
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_generator"),
+            sev,
+            actual == Some(expected),
+            format!("generator={actual:?}, expected={expected}"),
+        ));
+    }
+    for (kind, expected) in [
+        ("AwaitedValue", cs.operand_awaits),
+        ("ChannelType", cs.operand_channel_types),
+    ] {
+        if let Some(expected) = expected {
+            let count = cfg
+                .get("operands")
+                .and_then(|o| o.get("expressions"))
+                .and_then(Value::as_array)
+                .map(|expressions| {
+                    expressions
+                        .iter()
+                        .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+                        .count()
+                });
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{kind}"),
+                sev,
+                count == Some(expected),
+                format!("{kind} count={count:?}, expected={expected}"),
+            ));
+        }
+    }
+    for (kind, minimum) in [
+        ("Element", cs.operand_min_elements),
+        ("Collection", cs.operand_min_collections),
+    ] {
+        if let Some(minimum) = minimum {
+            let count = cfg
+                .get("operands")
+                .and_then(|o| o.get("expressions"))
+                .and_then(Value::as_array)
+                .map(|expressions| {
+                    expressions
+                        .iter()
+                        .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+                        .count()
+                });
+            out.push(check(
+                format!("symbol.{sid}.cfg.operand_{kind}"),
+                sev,
+                count.is_some_and(|n| n >= minimum),
+                format!("{kind} count={count:?}, minimum={minimum}"),
+            ));
+        }
+    }
+    if let Some(expected) = &cs.operand_positional_indices {
+        let actual: Option<Vec<_>> = cfg
+            .get("operands")
+            .and_then(|o| o.get("formals"))
+            .and_then(Value::as_array)
+            .map(|formals| {
+                formals
+                    .iter()
+                    .filter_map(|f| {
+                        f.get("kind")
+                            .and_then(|k| k.get("Positional").or_else(|| k.get("PositionalOnly")))
+                            .and_then(Value::as_u64)
+                    })
+                    .collect()
+            });
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_positional_indices"),
+            sev,
+            actual.as_ref() == Some(expected),
+            format!("positions={actual:?} expected={expected:?}"),
+        ));
+    }
+    if let Some(min) = cs.operand_min_writes {
+        let actual = cfg
+            .get("operands")
+            .and_then(|o| o.get("local_writes"))
+            .and_then(Value::as_array)
+            .map(Vec::len);
+        out.push(check(
+            format!("symbol.{sid}.cfg.operand_local_writes"),
+            sev,
+            actual.is_some_and(|n| n >= min),
+            format!("local writes={actual:?} min={min}"),
+        ));
+    }
     let nedges = cfg
         .get("edges")
         .and_then(|n| n.as_array())

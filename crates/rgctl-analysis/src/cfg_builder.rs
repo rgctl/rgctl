@@ -16,6 +16,13 @@ use tree_sitter::{Node, Tree};
 #[path = "cfg_predicate_tests.rs"]
 mod predicate_tests;
 
+#[cfg(test)]
+#[path = "formal_entry_tests.rs"]
+mod formal_entry_tests;
+
+#[path = "local_operand_capture.rs"]
+mod local_operand_capture;
+
 /// Maximum AST recursion depth for CFG expression walks (matches C++ extraction cap).
 const AST_WALK_MAX_DEPTH: usize = 2048;
 
@@ -179,6 +186,7 @@ const CFG_HANDLED_KINDS: &[&str] = &[
     "local_declaration_statement",
     "local_function_statement",
     "local_variable_declaration",
+    "lexical_declaration",
     "lock_statement",
     "logical_and_expression",
     "logical_or_expression",
@@ -597,6 +605,15 @@ fn collect_function_locations(
             };
             out.by_name.entry(func_name.clone()).or_default().push(loc);
             out.by_name_first.entry(func_name.clone()).or_insert(loc);
+            if ecma_constructor_owner(node, source, language).is_some()
+                && func_name != "constructor"
+            {
+                out.by_name
+                    .entry("constructor".into())
+                    .or_default()
+                    .push(loc);
+                out.by_name_first.entry("constructor".into()).or_insert(loc);
+            }
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -612,7 +629,14 @@ fn parse_language(language: &str, source: &[u8]) -> Result<Tree> {
 /// Resolve the Function name CFG should look up, matching language-plugin naming.
 fn callable_name_for_cfg(node: Node<'_>, source: &[u8], language: &str) -> Option<String> {
     match language {
-        "javascript" | "js" | "typescript" | "ts" => ecmascript_function_symbol_name(node, source),
+        "swift" if node.kind() == "init_declaration" => Some("init".to_owned()),
+        "javascript" | "js" | "typescript" | "ts" => ecma_constructor_owner(node, source, language)
+            .map(str::to_owned)
+            .or_else(|| ecmascript_function_symbol_name(node, source)),
+        "lua" if node.kind() == "function_declaration" => node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(str::to_owned),
         "puppet" => {
             // Prefer class_identifier / identifier / node_name over other children.
             let mut cursor = node.walk();
@@ -644,6 +668,30 @@ fn callable_name_for_cfg(node: Node<'_>, source: &[u8], language: &str) -> Optio
         }
         _ => extract_name_from_node(node, source).ok().flatten(),
     }
+}
+
+// Match the plugin's constructor Function name (the enclosing class), while
+// retaining the source spelling as a legacy name-only lookup alias. The native
+// method -> class_body -> class path has fixed depth; do not walk ancestors.
+fn ecma_constructor_owner<'source>(
+    node: Node<'_>,
+    source: &'source [u8],
+    language: &str,
+) -> Option<&'source str> {
+    if !matches!(language, "javascript" | "js" | "typescript" | "ts")
+        || node.kind() != "method_definition"
+        || node.child_by_field_name("name")?.utf8_text(source).ok()? != "constructor"
+    {
+        return None;
+    }
+    let body = node.parent()?;
+    if body.kind() != "class_body" {
+        return None;
+    }
+    body.parent()?
+        .child_by_field_name("name")?
+        .utf8_text(source)
+        .ok()
 }
 
 /// Elixir `def`/`defp`/… calls: name is the first argument call/identifier, not `def`.
@@ -790,7 +838,9 @@ fn find_function_by_name<'a>(
     while let Some(node) = stack.pop() {
         if function_kinds.contains(&node.kind())
             && let Some(func_name) = callable_name_for_cfg(node, source, language)
-            && func_name == name
+            && (func_name == name
+                || (name == "constructor"
+                    && ecma_constructor_owner(node, source, language).is_some()))
         {
             if function_body_node(node, language).is_some() {
                 if found_with_body.is_some() {
@@ -873,7 +923,11 @@ fn build_cfg_from_function_node(
         source,
         function_name,
     );
+    if let Some(body) = function_body_node(func_node, language) {
+        cfg.operands = crate::operands::lower_function_operands(language, func_node, body, source)?;
+    }
     let mut builder = CfgBuilder::new(&mut cfg, language);
+    builder.seed_formal_definitions(func_node.start_position().row + 1)?;
     builder.build_function(func_node, source)?;
     Ok(cfg)
 }
@@ -922,6 +976,8 @@ struct CfgBuilder<'a> {
     next_shadow_id: u32,
     /// Set after the function-body block has been entered (nested blocks push frames).
     block_scope_entered: bool,
+    /// Query-free native source/CFG links reused throughout one function build.
+    operand_anchors: local_operand_capture::OperandAnchors,
 }
 
 struct BreakableContext {
@@ -942,6 +998,7 @@ struct DeferredCall {
 impl<'a> CfgBuilder<'a> {
     fn new(cfg: &'a mut ControlFlowGraph, language: &'a str) -> Self {
         let entry = cfg.entry;
+        let operand_anchors = local_operand_capture::OperandAnchors::new(&cfg.operands);
         Self {
             cfg,
             current_block: entry,
@@ -966,6 +1023,7 @@ impl<'a> CfgBuilder<'a> {
             scope_frames: vec![HashMap::new()],
             next_shadow_id: 1,
             block_scope_entered: false,
+            operand_anchors,
         }
     }
 
@@ -1012,6 +1070,7 @@ impl<'a> CfgBuilder<'a> {
         defined: SmallVec<[DefVar; 2]>,
         used: SmallVec<[String; 3]>,
         is_declaration: bool,
+        reuse_current: bool,
     ) -> (SmallVec<[DefVar; 2]>, SmallVec<[String; 3]>) {
         // RHS uses must resolve against the *prior* binding (`let x = x + 1`).
         let used: SmallVec<[String; 3]> = used
@@ -1023,7 +1082,14 @@ impl<'a> CfgBuilder<'a> {
             .map(|dv| match dv {
                 DefVar::Local(name) => {
                     let scoped = if is_declaration {
-                        self.bind_local(&name)
+                        if reuse_current
+                            && let Some(existing) =
+                                self.scope_frames.last().and_then(|f| f.get(&name))
+                        {
+                            existing.clone()
+                        } else {
+                            self.bind_local(&name)
+                        }
                     } else {
                         self.resolve_local(&name)
                     };
@@ -1036,6 +1102,29 @@ impl<'a> CfgBuilder<'a> {
             })
             .collect();
         (defined, used)
+    }
+
+    /// Formal values exist on entry, before any body definition can shadow them.
+    /// The typed ID bridges the operand/binding API to ordinary CFG/PDG analysis.
+    fn seed_formal_definitions(&mut self, line: usize) -> Result<()> {
+        for index in 0..self.cfg.operands.formals.len() {
+            let formal = &self.cfg.operands.formals[index];
+            let Some(name) = self.cfg.operands.operand_name(formal.name) else {
+                continue;
+            };
+            let name = name.to_owned();
+            let value = formal.value;
+            let scoped = self.bind_local(&name);
+            self.capture_formal_write(&scoped, value)?;
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Parameter(crate::operands::FormalId(index as u32)),
+                line,
+                text: name,
+                defined_vars: smallvec::smallvec![DefVar::Local(scoped)],
+                used_vars: SmallVec::new(),
+            });
+        }
+        Ok(())
     }
 
     fn build_function(&mut self, func_node: Node, source: &[u8]) -> Result<()> {
@@ -1058,6 +1147,20 @@ impl<'a> CfgBuilder<'a> {
         }
         self.cfg.prune_unreachable_blocks();
         self.cfg.contract_empty_blocks();
+        let blocks = &self.cfg.blocks;
+        let retained = |position: crate::operands::StatementRef| {
+            blocks
+                .get(&position.block)
+                .is_some_and(|b| (position.index as usize) < b.statements.len())
+        };
+        self.cfg
+            .operands
+            .local_uses
+            .retain(|u| retained(u.statement));
+        self.cfg
+            .operands
+            .local_writes
+            .retain(|w| retained(w.statement));
         Ok(())
     }
 
@@ -1090,9 +1193,18 @@ impl<'a> CfgBuilder<'a> {
     fn add_statement(&mut self, node: Node, source: &[u8], kind: StatementKind) -> Result<()> {
         let line = node.start_position().row + 1;
         let text = node.utf8_text(source)?.trim().to_string();
-        let (defined_vars, used_vars) = extract_def_use(node, source);
+        let (mut defined_vars, mut used_vars) = extract_def_use(node, source);
+        defined_vars.sort();
+        used_vars.sort();
+        self.capture_local_reads(node, &used_vars)?;
         let is_decl = matches!(kind, StatementKind::Declaration);
-        let (defined_vars, used_vars) = self.rewrite_scoped_vars(defined_vars, used_vars, is_decl);
+        let (defined_vars, used_vars) = self.rewrite_scoped_vars(
+            defined_vars,
+            used_vars,
+            is_decl,
+            self.language == "go" && node.kind() == "short_var_declaration",
+        );
+        self.capture_local_writes(node, source, &defined_vars)?;
         let stmt = Statement {
             kind,
             line,
@@ -1139,11 +1251,14 @@ impl<'a> CfgBuilder<'a> {
 
     fn visit_block(&mut self, node: Node, source: &[u8]) -> Result<BlockId> {
         // First block-like is the function body (reuse root frame); nested blocks push.
-        let should_push = is_block_like(node.kind()) && self.block_scope_entered;
+        // `statement_list` is a transparent grammar wrapper (not another
+        // lexical block inside a Go function's braces).
+        let owns_scope = is_block_like(node.kind()) && node.kind() != "statement_list";
+        let should_push = owns_scope && self.block_scope_entered;
         if should_push {
             self.push_scope_frame();
         }
-        if is_block_like(node.kind()) {
+        if owns_scope {
             self.block_scope_entered = true;
         }
         let mut using_decls = 0usize;
@@ -1318,7 +1433,7 @@ impl<'a> CfgBuilder<'a> {
                 }
                 Ok(())
             }
-            "property_declaration" => {
+            "property_declaration" | "val_definition" | "var_definition" => {
                 self.visit_declaration_initializers(node, source)?;
                 if !self.flow_active {
                     return Ok(());
@@ -1406,6 +1521,7 @@ impl<'a> CfgBuilder<'a> {
             | "var_declaration"
             | "const_declaration"
             | "variable_declaration"
+            | "lexical_declaration"
             | "local_declaration_statement"
             | "local_variable_declaration"
             | "declaration"
@@ -1822,7 +1938,10 @@ impl<'a> CfgBuilder<'a> {
 
         self.flow_active = true;
         self.current_block = true_block;
-        if let Some(cons) = node.child_by_field_name("consequence") {
+        if let Some(cons) = node
+            .child_by_field_name("consequence")
+            .or_else(|| node.child_by_field_name("body"))
+        {
             self.visit_expr_for_control_flow(cons, source)?;
             if self.flow_active {
                 self.add_statement(cons, source, StatementKind::Expression)?;
@@ -4406,6 +4525,19 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn visit_switch(&mut self, node: Node, source: &[u8]) -> Result<()> {
+        let scoped_alias = self.language == "go"
+            && node.kind() == "type_switch_statement"
+            && node.child_by_field_name("alias").is_some();
+        if scoped_alias {
+            self.push_scope_frame();
+        }
+        let result = self.visit_switch_inner(node, source);
+        if scoped_alias {
+            self.pop_scope_frame();
+        }
+        result
+    }
+    fn visit_switch_inner(&mut self, node: Node, source: &[u8]) -> Result<()> {
         // Go: `switch init; value` — init runs before the branch.
         if let Some(init) = node.child_by_field_name("initializer") {
             self.visit_statement(init, source)?;
@@ -4418,6 +4550,36 @@ impl<'a> CfgBuilder<'a> {
                     break;
                 }
             }
+        }
+
+        // A Go type-switch alias is the successful selected value in each arm.
+        // Keep all possible origins; branch type filtering is a separate concern.
+        if self.language == "go"
+            && node.kind() == "type_switch_statement"
+            && let (Some(alias), Some(value)) = (
+                node.child_by_field_name("alias")
+                    .and_then(|n| n.named_child(0)),
+                node.child_by_field_name("value"),
+            )
+            && alias.kind() == "identifier"
+        {
+            let (_, mut used) = extract_def_use(value, source);
+            used.sort();
+            self.capture_local_reads(value, &used)?;
+            let defined = smallvec::smallvec![DefVar::local(alias.utf8_text(source)?)];
+            let (defined_vars, used_vars) = self.rewrite_scoped_vars(defined, used, true, false);
+            self.capture_local_writes(node, source, &defined_vars)?;
+            self.add_statement_to_current(Statement {
+                kind: StatementKind::Declaration,
+                line: node.start_position().row + 1,
+                text: format!(
+                    "{} := {}.(type)",
+                    alias.utf8_text(source)?,
+                    value.utf8_text(source)?
+                ),
+                defined_vars,
+                used_vars,
+            });
         }
 
         // C++17: `switch (init; cond)` — init inside condition_clause.
@@ -5794,8 +5956,8 @@ fn process(x: i32, y: i32, mut z: i32) -> i32 {
         let cfg = build_cfg_for_function("rust", code, "process").unwrap();
         assert_eq!(
             cfg.blocks.len(),
-            6,
-            "expected 6 blocks after empty contraction, got {}:\n{}",
+            7,
+            "expected formal entry plus 6 body blocks after empty contraction, got {}:\n{}",
             cfg.blocks.len(),
             cfg.to_dot()
         );
@@ -5963,7 +6125,11 @@ fn loop_example(n: i32) -> i32 {
     fn rust_block_ids(cfg: &ControlFlowGraph, needle: &str) -> Vec<BlockId> {
         cfg.blocks
             .values()
-            .filter(|b| b.statements.iter().any(|s| s.text.contains(needle)))
+            .filter(|b| {
+                b.statements.iter().any(|s| {
+                    !matches!(s.kind, StatementKind::Parameter(_)) && s.text.contains(needle)
+                })
+            })
             .map(|b| b.id)
             .collect()
     }

@@ -11,6 +11,7 @@ pub mod blast_radius_scc;
 pub mod blast_slice_handoff;
 pub mod boundary;
 pub mod calendar_policy;
+pub mod call_bindings;
 pub mod callgraph;
 pub mod centrality;
 pub mod centrality_approx;
@@ -40,11 +41,13 @@ pub mod hash_maps;
 pub mod interprocedural_cfg;
 pub mod interprocedural_slicing;
 pub mod language_profile;
+pub mod local_value_flow;
 pub mod macro_call_index;
 pub mod macro_call_lookup;
 pub mod migration;
 pub mod mro;
 pub mod node_lookup;
+pub mod operands;
 pub mod pdg;
 pub mod policy;
 pub mod policy_diff;
@@ -302,3 +305,13 @@ pub use violation_ledger::{
     VIOLATION_LEDGER_FILE, ViolationLedger, ViolationLedgerEntry, ledger_entry_from_delta,
 };
 pub use wl_hash::{CanonicalEdgeTag, CanonicalStatementKind, WeisfeilerLehmanHasher};
+
+/// Bounded possible-type origins over native value transfers.
+pub mod value_origins;
+
+#[cfg(test)]
+mod tier1_deferred_tests;
+#[cfg(test)]
+mod tier1_lookup_tests;
+#[cfg(test)]
+mod tier1_operand_tests;

@@ -1,0 +1,21 @@
+fn operand_sink(value: i32) -> i32 { return value; }
+fn operand_relay(value: i32) -> i32 { let alias = value; return operand_sink(alias); }
+
+fn operand_member(value: Receiver, other: i32) -> i32 { return value.perform(other); }
+
+fn operand_choice(flag: bool, left: i32, right: i32) -> i32 { return if flag { left } else { right }; }
+
+fn operand_field(mut box_value: OperandBox, value: Item) -> Item { box_value.slot = value; return box_value.slot; }
+fn operand_element(mut box_value: [Item; 2], value: Item) -> Item { box_value[0] = value; return box_value[1]; }
+
+fn operand_callback(callback: fn(i32) -> i32, value: i32) -> i32 { return callback(value); }
+
+fn operand_bound(callback: impl Fn(i32) -> i32, box_value: OperandBound, value: i32) -> i32 { return callback(value); }
+impl OperandBound { fn operand_bound_target(&self, value: i32) -> i32 { return value; } }
+
+async fn operand_deferred_source(value: Item) -> Item { return value; }
+async fn operand_await(value: Item) -> Item { return operand_deferred_source(value).await; }
+
+fn operand_computed(box_value: [fn(i32)->i32; 2], key: usize, value: i32) -> i32 { return box_value[key](value); }
+struct OperandConstructed { slot: i32 }
+fn operand_construct(value: i32) -> OperandConstructed { return OperandConstructed { slot: value }; }

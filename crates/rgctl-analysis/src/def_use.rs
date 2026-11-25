@@ -158,6 +158,8 @@ const DEF_USE_HANDLED_KINDS: &[&str] = &[
     "subscript_expression",
     "super_formal_parameter",
     "test_pattern",
+    "this",
+    "self",
     "top_level_variable_declaration",
     "tuple_pattern",
     "tuple_struct_pattern",
@@ -243,7 +245,7 @@ fn is_field_access_kind(kind: &str) -> bool {
             | "selector_expression"
             | "attribute"
             // Kotlin: `order.status` / `this.status` (expression + identifier children).
-            | "navigation_expression"
+            | "navigation_expression" | "method_index_expression" | "dot_index_expression"
     )
 }
 
@@ -321,9 +323,24 @@ fn collect_field_access_base_uses<'a>(
 ) {
     if let Some(object) = node
         .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("operand"))
         .or_else(|| node.child_by_field_name("argument"))
         .or_else(|| node.child_by_field_name("value"))
         .or_else(|| node.child_by_field_name("expression"))
+        .or_else(|| node.child_by_field_name("target"))
+        .or_else(|| node.child_by_field_name("table"))
+        .or_else(|| {
+            if node.kind() == "navigation_expression" {
+                node.named_child(0)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|n| matches!(n.kind(), "this" | "self"))
+        })
     {
         stack.push((object, false, depth + 1));
     }
@@ -337,10 +354,28 @@ fn collect_assignment_lhs<'a>(
     depth: usize,
     stack: &mut DefUseStack<'a>,
 ) {
+    if depth > AST_WALK_MAX_DEPTH {
+        return;
+    }
     if left.kind() == "directly_assignable_expression"
         && let Some(inner) = left.named_child(0)
     {
         collect_assignment_lhs(inner, source, defined, used, depth + 1, stack);
+        return;
+    }
+    if matches!(left.kind(), "expression_list" | "variable_list") {
+        for child in left.named_children(&mut left.walk()) {
+            collect_assignment_lhs(child, source, defined, used, depth + 1, stack);
+        }
+        return;
+    }
+    if let Some(base) = crate::operands::native_element_base(left) {
+        stack.push((base, false, depth + 1));
+        for child in left.named_children(&mut left.walk()) {
+            if child.id() != base.id() {
+                stack.push((child, false, depth + 1));
+            }
+        }
         return;
     }
     if is_field_access_kind(left.kind()) {
@@ -348,6 +383,22 @@ fn collect_assignment_lhs<'a>(
             defined.insert(def);
         }
         collect_field_access_base_uses(left, source, used, stack, depth);
+    } else if matches!(
+        left.kind(),
+        "subscript_expression"
+            | "subscript"
+            | "index_expression"
+            | "array_access"
+            | "element_access_expression"
+            | "element_reference"
+            | "bracket_index_expression"
+            | "assignable_expression"
+    ) {
+        // Indexed assignment mutates an element, not the variable holding the
+        // container. Both container and selector are reads at this position.
+        for child in left.named_children(&mut left.walk()) {
+            stack.push((child, false, depth + 1));
+        }
     } else if left.kind() == "instance_variable" {
         if let Ok(name) = left.utf8_text(source) {
             defined.insert(DefVar::Field {
@@ -402,6 +453,17 @@ fn collect_def_use_node<'a>(
     stack: &mut DefUseStack<'a>,
 ) {
     if depth > AST_WALK_MAX_DEPTH {
+        return;
+    }
+    if node.kind() == "call_expression"
+        && let Some(base) = crate::operands::native_element_base(node)
+    {
+        stack.push((base, false, depth + 1));
+        for child in node.named_children(&mut node.walk()) {
+            if child.id() != base.id() {
+                stack.push((child, false, depth + 1));
+            }
+        }
         return;
     }
     let kind = node.kind();
@@ -597,7 +659,9 @@ fn collect_def_use_node<'a>(
             } else {
                 let mut c = node.walk();
                 for ch in node.children(&mut c) {
-                    if ch.kind() != "command_name" {
+                    if ch.kind() != "command_name"
+                        || ch.named_child(0).is_some_and(|n| n.kind() != "word")
+                    {
                         stack.push((ch, false, depth + 1));
                     }
                 }
@@ -740,9 +804,8 @@ fn collect_def_use_node<'a>(
                 if child.is_named() {
                     if is_def_target {
                         collect_pattern_defs(child, source, defined, depth + 1);
-                    } else {
-                        stack.push((child, false, depth + 1));
                     }
+                    stack.push((child, false, depth + 1));
                 }
             }
         }
@@ -752,8 +815,23 @@ fn collect_def_use_node<'a>(
             }
         }
 
-        // Kotlin local/member `val x = expr` / `var (a, b) = expr`
+        "val_definition" | "var_definition" => {
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+            }
+            if let Some(value) = node.child_by_field_name("value") {
+                stack.push((value, false, depth + 1));
+            }
+        }
+        // Kotlin and Swift local/member declarations.
         "property_declaration" => {
+            if let Some(pattern) = node.child_by_field_name("name") {
+                collect_pattern_defs(pattern, source, defined, depth + 1);
+                if let Some(value) = node.child_by_field_name("value") {
+                    stack.push((value, false, depth + 1));
+                }
+                return;
+            }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if !child.is_named() {
@@ -937,6 +1015,14 @@ fn collect_def_use_node<'a>(
             }
         }
 
+        // Language-defined receiver tokens are values, even though Java/ECMA
+        // `this` and Rust `self` are not ordinary identifier nodes.
+        "this" | "self" | "this_expression" | "self_expression" if !is_def_target => {
+            if let Ok(name) = node.utf8_text(source) {
+                used.insert(name.to_string());
+            }
+        }
+
         // Shared identifiers
         "identifier"
         | "simple_identifier"
@@ -959,7 +1045,17 @@ fn collect_def_use_node<'a>(
                 || kind == "simple_identifier"
                 || kind == "shorthand_field_identifier"
                 || kind == "variable_name"
-                || kind == "variable")
+                || kind == "variable"
+                // Go's native grammar can parse callbacks[key](value) as a
+                // generic type conversion. Preserve the possible value head
+                // without treating unrelated type annotations as local reads.
+                || (kind == "type_identifier"
+                    && node.parent().is_some_and(|parent| {
+                        parent.kind() == "generic_type"
+                            && parent.parent().is_some_and(|call| {
+                                call.kind() == "type_conversion_expression"
+                            })
+                    })))
                 && let Ok(name) = node.utf8_text(source)
             {
                 used.insert(name.trim_start_matches('$').to_string());

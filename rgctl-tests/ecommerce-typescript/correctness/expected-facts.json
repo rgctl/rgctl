@@ -95,6 +95,277 @@
     ]
   },
   "symbols": {
+    "tier1_lookup_constructor_body": {
+      "match": {
+        "name": "OperandConstructed",
+        "file": "correctness/operand_flow.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2
+      }
+    },
+    "tier1_lookup_operand_returning_constructor": {
+      "match": {
+        "name": "operand_returning_constructor",
+        "file": "correctness/operand_flow.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
+    "tier1_lookup_operand_construct_return": {
+      "match": {
+        "name": "operand_construct_return",
+        "file": "correctness/operand_flow.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
+    "tier1_lookup_operand_computed": {
+      "match": {
+        "name": "operand_computed",
+        "file": "correctness/operand_flow.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1,
+        "operand_min_elements": 1
+      }
+    },
+    "tier1_lookup_operand_construct": {
+      "match": {
+        "name": "operand_construct",
+        "file": "correctness/operand_flow.ts"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_returns": 1
+      }
+    },
+    "operand_await": {
+      "match": {
+        "name": "operand_await"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_awaits": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_deferred_source": {
+      "match": {
+        "name": "operand_deferred_source"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_yield": {
+      "match": {
+        "name": "operand_yield"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_yields": 1,
+        "operand_generator": true,
+        "operand_returns": 1
+      }
+    },
+    "operand_generator": {
+      "match": {
+        "name": "operand_generator"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_apply": {
+      "match": {
+        "name": "operand_apply"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_partial_bind": {
+      "match": {
+        "name": "operand_partial_bind"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 2,
+        "operand_returns": 1
+      }
+    },
+    "operand_callback": {
+      "match": {
+        "name": "operand_callback"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_bound": {
+      "match": {
+        "name": "operand_bound"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 3,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_bound_target": {
+      "match": {
+        "name": "operand_bound_target"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 0,
+        "operand_returns": 1
+      }
+    },
+    "operand_callable_field": {
+      "match": {
+        "name": "operand_callable_field"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 3,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_field_writes": 1
+      }
+    },
+    "operand_box": {
+      "match": {
+        "name": "operand_box"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 1,
+        "operand_min_collections": 2,
+        "operand_min_elements": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_rest": {
+      "match": {
+        "name": "operand_rest"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_positional_indices": [],
+        "operand_returns": 1,
+        "operand_min_elements": 1
+      }
+    },
+    "operand_rest_relay": {
+      "match": {
+        "name": "operand_rest_relay"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_field": {
+      "match": {
+        "name": "operand_field"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 1,
+        "operand_element_writes": 0,
+        "operand_returns": 1
+      }
+    },
+    "operand_element": {
+      "match": {
+        "name": "operand_element"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 0,
+        "operand_min_elements": 1,
+        "operand_element_writes": 1
+      }
+    },
+    "operand_pattern": {
+      "match": {
+        "name": "operand_pattern"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 0,
+        "operand_returns": 1,
+        "operand_min_writes": 1,
+        "operand_positional_indices": [
+          1
+        ]
+      }
+    },
+    "operand_relay": {
+      "match": {
+        "name": "operand_relay"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_min_writes": 2
+      }
+    },
     "correctnessRoot": {
       "match": {
         "name": "correctnessRoot"
@@ -124,7 +395,7 @@
           "flag"
         ],
         "statement_kinds_any": [
-          "Expression",
+          "Declaration",
           "Branch",
           "Return"
         ]
@@ -144,14 +415,15 @@
         ]
       },
       "pdg": {
-        "exact_data_deps": 2,
+        "exact_data_deps": 3,
         "exact_control_deps": 2,
-        "exact_node_count": 4,
+        "exact_node_count": 5,
         "exact_node_kinds": [
           "Branch",
-          "Expression",
+          "Declaration",
           "Return",
-          "Return"
+          "Return",
+          "Parameter(FormalId(0))"
         ],
         "data_edges": [
           {
