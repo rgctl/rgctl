@@ -34,6 +34,105 @@
     ]
   },
   "symbols": {
+    "operand_await": {
+      "match": {
+        "name": "operand_await"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_awaits": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_deferred_source": {
+      "match": {
+        "name": "operand_deferred_source"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_returns": 1,
+        "operand_generator": false
+      }
+    },
+    "operand_callback": {
+      "match": {
+        "name": "operand_callback"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_bound": {
+      "match": {
+        "name": "operand_bound"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 3,
+        "operand_calls": 1,
+        "operand_returns": 1
+      }
+    },
+    "operand_bound_target": {
+      "match": {
+        "name": "operand_bound_target"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 2,
+        "operand_calls": 0,
+        "operand_returns": 1
+      }
+    },
+    "operand_field": {
+      "match": {
+        "name": "operand_field"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 1,
+        "operand_element_writes": 0,
+        "operand_returns": 1
+      }
+    },
+    "operand_element": {
+      "match": {
+        "name": "operand_element"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_field_writes": 0,
+        "operand_min_elements": 1,
+        "operand_element_writes": 1
+      }
+    },
+    "operand_relay": {
+      "match": {
+        "name": "operand_relay"
+      },
+      "severity": "required",
+      "unique": true,
+      "cfg": {
+        "operand_formals": 1,
+        "operand_calls": 1,
+        "operand_returns": 1,
+        "operand_min_writes": 2
+      }
+    },
     "correctnessRoot": {
       "match": {
         "name": "correctness_root"
@@ -78,9 +177,9 @@
         ]
       },
       "pdg": {
-        "exact_data_deps": 2,
+        "exact_data_deps": 3,
         "exact_control_deps": 2,
-        "exact_node_count": 4,
+        "exact_node_count": 5,
         "data_edges": [
           {
             "variable": "value"
