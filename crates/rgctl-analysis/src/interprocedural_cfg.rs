@@ -40,6 +40,11 @@ pub struct InterproceduralCfgView<'a> {
 }
 
 impl InterproceduralCfgView<'_> {
+    /// Create a lazy, query-local arena for resolver-selected call-site bindings.
+    pub fn call_bindings(&self) -> crate::call_bindings::CallBindings<'_, Self> {
+        crate::call_bindings::CallBindings::new(self)
+    }
+
     /// Build a borrowed view over archived CFGs and a live call graph.
     pub fn from_archive<'a>(
         archive: &'a CfgPdgArchive,
@@ -120,6 +125,11 @@ impl InterproceduralCfgAccess for InterproceduralCfgView<'_> {
 }
 
 impl InterproceduralCFG {
+    /// Create a lazy, query-local arena for resolver-selected call-site bindings.
+    pub fn call_bindings(&self) -> crate::call_bindings::CallBindings<'_, Self> {
+        crate::call_bindings::CallBindings::new(self)
+    }
+
     /// Build from backend and source file contents keyed by path.
     pub fn build(backend: &MemoryBackend, source_files: &HashMap<String, String>) -> Result<Self> {
         use rgctl_graph::backend::GraphBackend;

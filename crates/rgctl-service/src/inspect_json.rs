@@ -18,6 +18,9 @@ pub struct InspectCfgResponse {
     pub symbol: String,
     pub layer: String,
     pub pruned: bool,
+    /// Native invocation and local-flow facts for this callable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operands: Option<rgctl_analysis::operands::FunctionOperands>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_byte: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +150,7 @@ pub fn inspect_cfg_json(symbol: &str, cfg: &ControlFlowGraph, pruned: bool) -> I
         symbol: symbol.to_string(),
         layer: "cfg".into(),
         pruned,
+        operands: Some(cfg.operands.clone()),
         start_byte: None,
         end_byte: None,
         name_start_byte: None,
@@ -253,6 +257,7 @@ pub fn fixture_inspect_cfg_response() -> InspectCfgResponse {
         symbol: "main".into(),
         layer: "cfg".into(),
         pruned: false,
+        operands: None,
         start_byte: None,
         end_byte: None,
         name_start_byte: None,

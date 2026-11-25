@@ -149,6 +149,19 @@ pub struct ControlDependency {
 }
 
 impl ProgramDependenceGraph {
+    /// Typed entry definitions corresponding to the native formal operand pool.
+    /// Build an index once when joining many bindings; names and lines are not IDs.
+    pub fn formal_definitions(
+        &self,
+    ) -> impl Iterator<Item = (crate::operands::FormalId, &PdgNode)> {
+        self.nodes
+            .values()
+            .filter_map(|node| match node.statement.kind {
+                crate::cfg::StatementKind::Parameter(id) => Some((id, node)),
+                _ => None,
+            })
+    }
+
     pub(crate) fn from_parts(
         nodes: HashMap<PdgNodeId, PdgNode>,
         data_deps: Vec<DataDependency>,

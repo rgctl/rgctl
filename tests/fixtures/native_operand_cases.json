@@ -1,0 +1,82 @@
+[
+  {
+    "language": "c",
+    "file": "rgctl-tests/ecommerce-c/correctness/operand_flow.c"
+  },
+  {
+    "language": "cpp",
+    "file": "rgctl-tests/ecommerce-cpp/correctness/operand_flow.cpp"
+  },
+  {
+    "language": "csharp",
+    "file": "rgctl-tests/ecommerce-csharp/correctness/operand_flow.cs"
+  },
+  {
+    "language": "java",
+    "file": "rgctl-tests/ecommerce-java/correctness/operand_flow.java"
+  },
+  {
+    "language": "groovy",
+    "file": "rgctl-tests/ecommerce-groovy/correctness/operand_flow.groovy"
+  },
+  {
+    "language": "go",
+    "file": "rgctl-tests/ecommerce-go/correctness/operand_flow.go"
+  },
+  {
+    "language": "javascript",
+    "file": "rgctl-tests/ecommerce-javascript/correctness/operand_flow.js"
+  },
+  {
+    "language": "typescript",
+    "file": "rgctl-tests/ecommerce-typescript/correctness/operand_flow.ts"
+  },
+  {
+    "language": "kotlin",
+    "file": "rgctl-tests/ecommerce-kotlin/correctness/operand_flow.kt"
+  },
+  {
+    "language": "php",
+    "file": "rgctl-tests/ecommerce-php/correctness/operand_flow.php"
+  },
+  {
+    "language": "puppet",
+    "file": "rgctl-tests/ecommerce-puppet/correctness/operand_flow.pp"
+  },
+  {
+    "language": "python",
+    "file": "rgctl-tests/ecommerce-python/correctness/operand_flow.py"
+  },
+  {
+    "language": "ruby",
+    "file": "rgctl-tests/ecommerce-ruby/correctness/operand_flow.rb"
+  },
+  {
+    "language": "rust",
+    "file": "rgctl-tests/ecommerce-rust/correctness/operand_flow.rs"
+  },
+  {
+    "language": "swift",
+    "file": "tests/fixtures/correctness_matrix/swift/correctness/operand_flow.swift"
+  },
+  {
+    "language": "scala",
+    "file": "tests/fixtures/correctness_matrix/scala/correctness/operand_flow.scala"
+  },
+  {
+    "language": "dart",
+    "file": "tests/fixtures/correctness_matrix/dart/correctness/operand_flow.dart"
+  },
+  {
+    "language": "elixir",
+    "file": "tests/fixtures/correctness_matrix/elixir/correctness/operand_flow.ex"
+  },
+  {
+    "language": "lua",
+    "file": "tests/fixtures/correctness_matrix/lua/correctness/operand_flow.lua"
+  },
+  {
+    "language": "bash",
+    "file": "tests/fixtures/correctness_matrix/bash/correctness/operand_flow.sh"
+  }
+]
