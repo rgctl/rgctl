@@ -426,8 +426,18 @@ impl AnalysisResults {
         let table = self
             .centrality
             .get_or_insert_with(|| CentralityTable::with_capacity(node_count));
+        if compact_to_uuid.as_slice() == view.index_to_uuid_slice() {
+            for slot in 0..node_count {
+                table.pagerank[slot] = pagerank[slot] as f32;
+                table.betweenness[slot] = betweenness[slot] as f32;
+                table.harmonic[slot] = harmonic[slot] as f32;
+                table.in_degree[slot] = in_degree[slot] as u32;
+                table.out_degree[slot] = out_degree[slot] as u32;
+            }
+            return;
+        }
         for (slot, uuid) in compact_to_uuid.iter().enumerate() {
-            let Some(node_idx) = view.uuid_to_index.get(uuid) else {
+            let Some(node_idx) = view.get_index(*uuid) else {
                 continue;
             };
             let flat_id = node_idx.index();

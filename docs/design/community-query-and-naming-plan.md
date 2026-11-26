@@ -49,7 +49,7 @@ This document specifies the **Fast-Leiden Community Detection, $\mu + 4\sigma$ H
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Leiden Algorithm (Well-Connected Communities)** | Traag, Waltman & van Eck (2019), *From Louvain to Leiden: Guaranteeing Well-Connected Communities* (*Scientific Reports*, 9:5233) | Classic Louvain can produce internally disconnected communities when a bridge node moves out. [`CommunityDetector`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community.rs#L1-L340) implements **Fast-Leiden**: queue-driven local modularity moving followed by explicit BFS connected-component refinement (`refine_partition`) and super-node coarsening. |
+| **Leiden Algorithm (Well-Connected Communities)** | Traag, Waltman & van Eck (2019), *From Louvain to Leiden: Guaranteeing Well-Connected Communities* (*Scientific Reports*, 9:5233) | Classic Louvain can produce internally disconnected communities when a bridge node moves out. [`CommunityDetector`](../../crates/rgctl-analysis/src/community.rs#L1-L340) implements **Fast-Leiden**: queue-driven local modularity moving followed by explicit BFS connected-component refinement (`refine_partition`) and super-node coarsening. |
 | **Newman-Girvan Modularity ($Q$)** | Newman & Girvan (2004), *Finding and Evaluating Community Structure in Networks* | Optimizes $Q = \frac{1}{2m} \sum_{i,j} \left[ A_{ij} - \gamma \frac{k_i k_j}{2m} \right] \delta(c_i, c_j)$ with configurable resolution $\gamma$ (`CommunityConfig::resolution = 1.0`). |
 | **Scale-Free Utility Hub Stripping ($\mu + 4\sigma$)** | Power-law hub suppression in software dependency networks | Ubiquitous logging, error, and string utilities otherwise pull unrelated business domains into one giant hairball cluster. `HubStripPolicy::MeanPlusFourSigma` strips vertices with degree $> \max(32, \mu + 4\sigma)$ prior to clustering and places them in a dedicated `"Shared / Infrastructure"` partition. |
 | **Path-Prefix & Token-Frequency Cluster Labeling** | TF-IDF cluster summarization (Manning, Raghavan & Schütze, 2008) | `infer_label_from_names` and `fill_community_labels` derive concise human-readable names (e.g., `orders / checkout` or package prefix `com.example.billing`) from member paths and camelCase/snake_case identifier tokens, deduplicating collisions (`auth`, `auth (2)`). |
@@ -88,7 +88,7 @@ pub struct CommunityTable {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl communities --help`, `rgctl inventory --help`, and [`src/cli/communities.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/communities.rs):
+Verified against `rgctl communities --help`, `rgctl inventory --help`, and [`src/cli/communities.rs`](../../src/cli/communities.rs):
 
 ```bash
 # List all detected Fast-Leiden communities with heuristic labels and member counts
@@ -130,11 +130,11 @@ rgctl metrics --communities -f json
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Fast-Leiden Detector & Hub Policy** | [`crates/rgctl-analysis/src/community.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/community.rs) | `CommunityDetector`, `CommunityConfig`, `HubStripPolicy`, `refine_partition`, `fill_community_labels`, `CommunityQueryContext` |
-| **Persisted Community Table** | [`crates/rgctl-analysis/src/results.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/results.rs) | `AnalysisResults`, `CommunityTable` |
-| **CLI Communities Command** | [`src/cli/communities.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/communities.rs) | `CommunitiesLabelArgs`, `run_list`, `run_label` |
-| **Structured Query Inventory** | [`crates/rgctl-graph/src/structured_query.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/structured_query.rs) | `InventoryBy::Community` |
-| **Dashboard Export** | [`crates/rgctl-dashboard/src/communities.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/communities.rs) | `summarize_communities` |
+| **Fast-Leiden Detector & Hub Policy** | [`crates/rgctl-analysis/src/community.rs`](../../crates/rgctl-analysis/src/community.rs) | `CommunityDetector`, `CommunityConfig`, `HubStripPolicy`, `refine_partition`, `fill_community_labels`, `CommunityQueryContext` |
+| **Persisted Community Table** | [`crates/rgctl-analysis/src/results.rs`](../../crates/rgctl-analysis/src/results.rs) | `AnalysisResults`, `CommunityTable` |
+| **CLI Communities Command** | [`src/cli/communities.rs`](../../src/cli/communities.rs) | `CommunitiesLabelArgs`, `run_list`, `run_label` |
+| **Structured Query Inventory** | [`crates/rgctl-graph/src/structured_query.rs`](../../crates/rgctl-graph/src/structured_query.rs) | `InventoryBy::Community` |
+| **Dashboard Export** | [`crates/rgctl-dashboard/src/communities.rs`](../../crates/rgctl-dashboard/src/communities.rs) | `summarize_communities` |
 
 ---
 

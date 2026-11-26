@@ -90,7 +90,7 @@ pub struct FieldWriteFact {
 
 ### 4.1 CLI Subcommands (`rgctl cpg`)
 
-Verified against `rgctl cpg --help` and [`src/cli/cpg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/cpg.rs#L19-L80):
+Verified against `rgctl cpg --help` and [`src/cli/cpg.rs`](../../src/cli/cpg.rs#L19-L80):
 
 ```bash
 # 1. Check L_repo and L_proc archive status
@@ -151,11 +151,11 @@ rgctl cpg export --format graphml --output /tmp/order_cpg.graphml --path-contain
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Virtual CPG Query Engine** | [`crates/rgctl-analysis/src/cpg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cpg.rs) | `cpg_status`, `cpg_function`, `cpg_calls`, `cpg_mutations`, `cpg_flows`, `export_cpg` |
-| **Field-Write Index & Type Recovery** | [`crates/rgctl-analysis/src/field_write.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/field_write.rs) | `FieldWriteFact`, `FieldWriteIndex`, `MutationQuery` |
-| **Coarse AST Skeleton Archive** | [`crates/rgctl-analysis/src/ast_skeleton.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/ast_skeleton.rs) | `AstSkeletonArchive`, `AstSkeletonNode` |
-| **v3 CFG/PDG Archive** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `ensure_cfg_pdg_for_source` |
-| **CLI & HTTP Service Dispatch** | [`src/cli/cpg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/cpg.rs) | `CpgAction`, `run`, `cpg_action_to_service` (`POST /api/cpg`) |
+| **Virtual CPG Query Engine** | [`crates/rgctl-analysis/src/cpg.rs`](../../crates/rgctl-analysis/src/cpg.rs) | `cpg_status`, `cpg_function`, `cpg_calls`, `cpg_mutations`, `cpg_flows`, `export_cpg` |
+| **Field-Write Index & Type Recovery** | [`crates/rgctl-analysis/src/field_write.rs`](../../crates/rgctl-analysis/src/field_write.rs) | `FieldWriteFact`, `FieldWriteIndex`, `MutationQuery` |
+| **Coarse AST Skeleton Archive** | [`crates/rgctl-analysis/src/ast_skeleton.rs`](../../crates/rgctl-analysis/src/ast_skeleton.rs) | `AstSkeletonArchive`, `AstSkeletonNode` |
+| **v3 CFG/PDG Archive** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchiveMmap`, `ensure_cfg_pdg_for_source` |
+| **CLI & HTTP Service Dispatch** | [`src/cli/cpg.rs`](../../src/cli/cpg.rs) | `CpgAction`, `run`, `cpg_action_to_service` (`POST /api/cpg`) |
 
 ---
 

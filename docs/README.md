@@ -54,6 +54,7 @@ Internals and contribution bars — not the default agent reading path.
 | [Code structure](Code_structure.md) | Crate layout |
 | [Analysis architecture](analysis-architecture.md) | CFG / PDG / taint |
 | [Graph storage architecture](graph-storage-architecture.md) | Snapshots, blast cache |
+| [CSR topology architecture](design/csr-topology-architecture.md) | Zero-copy v5 CSR mmap, typed sub-slices, pull PageRank, Fast-Leiden, Beamer BFS |
 | [Integration test matrix](internal/integration-tests.md) | Tier A/B/C — in-repo artifacts, HTTP serve, CLI subprocess · golden CLI: `tests/cli_output/` |
 | [HTTP server and dashboard](https://rgctl.io/docs/guides/http-server-and-dashboard/) | Serve / dashboard UI |
 | [Migration planner design](design/migration-planner-design.md) · [Migration algorithms](migration-algorithms.md) | Migration internals |
@@ -66,7 +67,7 @@ Internals and contribution bars — not the default agent reading path.
 | Term | Meaning |
 |------|---------|
 | Tier-1 deep-analysis languages | Custom plugins with `*-ast-coverage.json` + CFG/PDG (single-pass `ScopeStack` + `KindDispatchTable`); distinct from the ~60 language/config plugins in [`languages.toml`](../languages.toml) |
-| Default graph artifact | `.rgctl/graph.snapshot.bin` (`RGCL` v2 columnar mmap); `graph.db` / `graph.json` only with `--write-json-graph` |
+| Default graph artifact | `.rgctl/graph.snapshot.bin` (`RBGR` v5 columnar + zero-copy CSR mmap); `graph.db` / `graph.json` only with `--write-json-graph` |
 | `--with-cfg` | Whole-repo CFG/PDG archive (needed for `taint --sink`, `cpg mutations`); `slice` / `cpg flows` lazy-build one function without it |
 | Communities | **Fast-Leiden** (local moving + BFS refinement + coarsening) with $\mu+4\sigma$ `HubStripPolicy` |
 | Canonical query / policy CLI | `find` / `callers` / `callees` / `relations` / `inventory`; `review check` (`query` / `pr-check` are compatibility aliases) |

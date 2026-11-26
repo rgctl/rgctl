@@ -221,17 +221,42 @@ impl FlatGraphIndex {
         let node_count = view.node_count();
         let mut flat_edges = Vec::new();
         let mut participates = vec![false; node_count];
-        let allowed = edge_type_set(allowed_types);
 
-        let _ = view.for_each_edge(|src, dst, ty| {
-            if allowed.contains(&ty) {
-                let s = src.index();
-                let t = dst.index();
-                flat_edges.push((s, t));
-                participates[s] = true;
-                participates[t] = true;
+        if let [single_ty] = allowed_types {
+            let single_ty = *single_ty;
+            for s in 0..node_count {
+                let slice = view.topo.csr.out_neighbors_of_type(s as u32, single_ty);
+                if !slice.is_empty() {
+                    participates[s] = true;
+                    for &dst in slice {
+                        let t = dst as usize;
+                        flat_edges.push((s, t));
+                        participates[t] = true;
+                    }
+                }
             }
-        });
+            return Self {
+                node_count,
+                flat_edges,
+                participates,
+            };
+        }
+
+        let mut mask = [false; 256];
+        for &ty in allowed_types {
+            mask[rgctl_graph::csr::edge_type_to_u8(ty) as usize] = true;
+        }
+        for s in 0..node_count {
+            let (targets, types) = view.topo.csr.out_neighbors(s as u32);
+            for (i, &dst) in targets.iter().enumerate() {
+                if mask[types[i] as usize] {
+                    let t = dst as usize;
+                    flat_edges.push((s, t));
+                    participates[s] = true;
+                    participates[t] = true;
+                }
+            }
+        }
 
         Self {
             node_count,
@@ -246,12 +271,54 @@ impl FlatGraphIndex {
         store: &rgctl_graph::SnapshotNodeStore,
         allowed_types: &[EdgeType],
     ) -> rgctl_error::Result<(Self, Vec<Uuid>)> {
-        let allowed = edge_type_set(allowed_types);
         if let Some(col) = store.columnar() {
             let node_count = col.node_count();
             let uuids: Vec<Uuid> = col.node_ids_by_index().map(|(_, id)| id).collect();
             let mut flat_edges = Vec::with_capacity(col.edge_count().min(262_144));
             let mut participates = vec![false; node_count];
+
+            if let Some(csr) = col.csr() {
+                if let [single_ty] = allowed_types {
+                    let single_ty = *single_ty;
+                    for s in 0..node_count {
+                        let slice = csr.out_neighbors_of_type(s as u32, single_ty);
+                        if !slice.is_empty() {
+                            participates[s] = true;
+                            for &dst in slice {
+                                let t = dst as usize;
+                                flat_edges.push((s, t));
+                                participates[t] = true;
+                            }
+                        }
+                    }
+                } else {
+                    let mut mask = [false; 256];
+                    for &ty in allowed_types {
+                        mask[rgctl_graph::csr::edge_type_to_u8(ty) as usize] = true;
+                    }
+                    for s in 0..node_count {
+                        let (targets, types) = csr.out_neighbors(s as u32);
+                        for (i, &dst) in targets.iter().enumerate() {
+                            if mask[types[i] as usize] {
+                                let t = dst as usize;
+                                flat_edges.push((s, t));
+                                participates[s] = true;
+                                participates[t] = true;
+                            }
+                        }
+                    }
+                }
+                return Ok((
+                    Self {
+                        node_count,
+                        flat_edges,
+                        participates,
+                    },
+                    uuids,
+                ));
+            }
+
+            let allowed = edge_type_set(allowed_types);
             col.for_each_edge(|from, to, ty| {
                 if allowed.contains(&ty)
                     && let (Some(s), Some(t)) = (col.find_node_index(from), col.find_node_index(to))
@@ -322,6 +389,27 @@ impl FlatGraphIndex {
         }
         CsrOutAdj { offsets, targets }
     }
+
+    /// Build a compact CSR incoming adjacency (destination -> sources) in two passes.
+    pub fn build_in_csr(&self) -> CsrOutAdj {
+        let n = self.node_count;
+        let mut degree = vec![0u32; n];
+        for &(_, dst) in &self.flat_edges {
+            degree[dst] += 1;
+        }
+        let mut offsets = vec![0u32; n + 1];
+        for i in 0..n {
+            offsets[i + 1] = offsets[i] + degree[i];
+        }
+        let mut targets = vec![0u32; self.flat_edges.len()];
+        let mut cursor = offsets.clone();
+        for &(src, dst) in &self.flat_edges {
+            let pos = cursor[dst] as usize;
+            targets[pos] = src as u32;
+            cursor[dst] += 1;
+        }
+        CsrOutAdj { offsets, targets }
+    }
 }
 
 /// Compressed sparse row outgoing adjacency for flat graph projections.
@@ -381,6 +469,32 @@ impl FastPageRank {
         view: &PetGraphView,
         allowed_types: &[EdgeType],
     ) -> (HashMap<Uuid, f64>, PageRankStats) {
+        if let [single_ty] = allowed_types {
+            let single_ty = *single_ty;
+            let (ranks, stats) = self.compute_view_single_type(view, single_ty);
+            let mut scores = HashMap::with_capacity(view.node_count());
+            for (idx, uuid) in view.index_uuid_iter() {
+                let u = idx.index();
+                let active = !view
+                    .topo
+                    .csr
+                    .out_neighbors_of_type(u as u32, single_ty)
+                    .is_empty()
+                    || !view
+                        .topo
+                        .csr
+                        .in_neighbors_of_type(u as u32, single_ty)
+                        .is_empty();
+                let score = if active {
+                    ranks.get(u).copied().unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                scores.insert(uuid, score);
+            }
+            return (scores, stats);
+        }
+
         let index = FlatGraphIndex::from_view(view, allowed_types);
         let (ranks, stats) = self.compute_flat(&index);
         let mut scores = HashMap::new();
@@ -398,14 +512,69 @@ impl FastPageRank {
         (scores, stats)
     }
 
-    /// Run power iteration on a pre-built flat index (hot path).
+    /// Run pull-based CSR power iteration on `view` restricted to a single `EdgeType`
+    /// with zero `CsrOutAdj` allocation (borrows incoming CSR slices directly).
+    pub fn compute_view_single_type(
+        &self,
+        view: &PetGraphView,
+        edge_type: EdgeType,
+    ) -> (Vec<f64>, PageRankStats) {
+        let node_count = view.node_count();
+        let csr = &view.topo.csr;
+        let out_degrees: Vec<u32> = (0..node_count)
+            .map(|u| csr.out_neighbors_of_type(u as u32, edge_type).len() as u32)
+            .collect();
+        self.compute_pull_impl(node_count, &out_degrees, |dst| {
+            csr.in_neighbors_of_type(dst as u32, edge_type)
+        })
+    }
+
+    /// Run pull-based parallel CSR power iteration on a pre-built flat index (hot path).
     ///
-    /// Each iteration precomputes `node_contrib[src] = damping * rank[src] / out_degree`
-    /// (Rayon) and reduces dangling mass / max Δ with parallel folds (`f64` throughout).
+    /// Each iteration pulls `sum_{src in in_csr.neighbors(dst)} node_contrib[src]` into
+    /// disjoint destination slots (`par_iter_mut` on graphs >= 4,096 nodes) with zero
+    /// per-worker `Vec<f64>` scratch buffers and fused `max_delta` reduction.
     pub fn compute_flat(&self, index: &FlatGraphIndex) -> (Vec<f64>, PageRankStats) {
+        let node_count = index.node_count;
+        if node_count == 0 {
+            return (
+                Vec::new(),
+                PageRankStats {
+                    iterations_run: 0,
+                    converged: true,
+                    max_delta: 0.0,
+                },
+            );
+        }
+        let mut out_degrees = vec![0u32; node_count];
+        for &(src, _) in &index.flat_edges {
+            out_degrees[src] += 1;
+        }
+        let in_csr = index.build_in_csr();
+        self.compute_with_in_csr(node_count, &out_degrees, &in_csr)
+    }
+
+    /// Run pull-based parallel CSR power iteration over an explicit incoming CSR.
+    pub fn compute_with_in_csr(
+        &self,
+        node_count: usize,
+        out_degrees: &[u32],
+        in_csr: &CsrOutAdj,
+    ) -> (Vec<f64>, PageRankStats) {
+        self.compute_pull_impl(node_count, out_degrees, |dst| in_csr.neighbors(dst))
+    }
+
+    fn compute_pull_impl<'a, F>(
+        &self,
+        node_count: usize,
+        out_degrees: &[u32],
+        in_neighbors: F,
+    ) -> (Vec<f64>, PageRankStats)
+    where
+        F: Fn(usize) -> &'a [u32] + Sync,
+    {
         use rayon::prelude::*;
 
-        let node_count = index.node_count;
         if node_count == 0 {
             return (
                 Vec::new(),
@@ -420,11 +589,6 @@ impl FastPageRank {
         let mut current_ranks = vec![1.0 / node_count as f64; node_count];
         let mut next_ranks = vec![0.0; node_count];
         let mut node_contrib = vec![0.0f64; node_count];
-
-        let mut out_degrees = vec![0u32; node_count];
-        for &(src, _) in &index.flat_edges {
-            out_degrees[src] += 1;
-        }
 
         let sink_nodes: Vec<usize> = (0..node_count).filter(|&i| out_degrees[i] == 0).collect();
 
@@ -441,8 +605,6 @@ impl FastPageRank {
         let parallel = node_count >= PARALLEL_THRESHOLD;
 
         for iter in 0..self.max_iterations {
-            next_ranks.fill(base_score);
-
             let dangling_mass: f64 = if parallel {
                 sink_nodes
                     .par_iter()
@@ -454,12 +616,8 @@ impl FastPageRank {
                     .map(|&sink_idx| current_ranks[sink_idx])
                     .sum()
             };
-            let dangling_allocation = (damping * dangling_mass) / node_count as f64;
-            for score in next_ranks.iter_mut() {
-                *score += dangling_allocation;
-            }
+            let base_plus_dangling = base_score + (damping * dangling_mass) / node_count as f64;
 
-            // Hoist per-source contribution outside the edge loop.
             if parallel {
                 node_contrib
                     .par_iter_mut()
@@ -483,22 +641,36 @@ impl FastPageRank {
                 }
             }
 
-            for &(src, dst) in &index.flat_edges {
-                next_ranks[dst] += node_contrib[src];
-            }
-
+            // Pull-based CSR sweep: each destination vertex owns `next_ranks[dst]` exclusively,
+            // fusing base + dangling + incoming sum + max_delta reduction in a single pass.
             let max_delta = if parallel {
-                current_ranks
-                    .par_iter()
-                    .zip(next_ranks.par_iter())
-                    .map(|(a, b)| (a - b).abs())
+                next_ranks
+                    .par_iter_mut()
+                    .zip(current_ranks.par_iter())
+                    .enumerate()
+                    .map(|(dst, (slot, &prev))| {
+                        let mut sum = base_plus_dangling;
+                        for &src in in_neighbors(dst) {
+                            sum += node_contrib[src as usize];
+                        }
+                        *slot = sum;
+                        (sum - prev).abs()
+                    })
                     .reduce(|| 0.0, f64::max)
             } else {
-                current_ranks
-                    .iter()
-                    .zip(next_ranks.iter())
-                    .map(|(a, b)| (a - b).abs())
-                    .fold(0.0, f64::max)
+                let mut max_d = 0.0f64;
+                for (dst, slot) in next_ranks.iter_mut().enumerate() {
+                    let mut sum = base_plus_dangling;
+                    for &src in in_neighbors(dst) {
+                        sum += node_contrib[src as usize];
+                    }
+                    let d = (sum - current_ranks[dst]).abs();
+                    if d > max_d {
+                        max_d = d;
+                    }
+                    *slot = sum;
+                }
+                max_d
             };
 
             stats.max_delta = max_delta;
@@ -603,7 +775,7 @@ impl BetweennessCentrality {
     }
 }
 
-/// Normalized out-harmonic centrality via all-pairs BFS on filtered edges.
+/// Normalized out-harmonic centrality via Beamer direction-optimizing BFS on bidirectional CSR.
 pub struct HarmonicCentrality;
 
 impl HarmonicCentrality {
@@ -619,44 +791,106 @@ impl HarmonicCentrality {
         }
         let index = FlatGraphIndex::from_view(view, allowed_types);
         let out_adj = index.build_out_csr();
-        Self::compute_with_adj(view, &index, &out_adj)
+        let in_adj = index.build_in_csr();
+        Self::compute_with_bi_adj(view, &index, &out_adj, &in_adj)
     }
 
-    /// Compute normalized harmonic scores from a pre-built index and CSR adjacency.
+    /// Compute normalized harmonic scores from a pre-built index and outgoing CSR adjacency.
     pub fn compute_with_adj(
         view: &PetGraphView,
         index: &FlatGraphIndex,
         out_adj: &CsrOutAdj,
     ) -> HashMap<Uuid, f64> {
-        use std::collections::VecDeque;
+        let in_adj = index.build_in_csr();
+        Self::compute_with_bi_adj(view, index, out_adj, &in_adj)
+    }
 
+    /// Compute normalized harmonic scores using Beamer direction-optimizing (top-down /
+    /// bottom-up) BFS over forward and reverse CSR arrays, reusing frontier buffers
+    /// across all source vertices.
+    pub fn compute_with_bi_adj(
+        view: &PetGraphView,
+        index: &FlatGraphIndex,
+        out_adj: &CsrOutAdj,
+        in_adj: &CsrOutAdj,
+    ) -> HashMap<Uuid, f64> {
         let n = index.node_count;
         if n == 0 {
             return HashMap::new();
         }
 
         let norm_factor = if n <= 1 { 0.0 } else { 1.0 / (n as f64 - 1.0) };
+        let total_edges = out_adj.targets.len();
+        let bottom_up_edge_threshold = (total_edges / 20).max(64);
+        let allow_bottom_up = n >= 64 && total_edges > 0;
+
         let mut visited = vec![false; n];
+        let mut in_frontier = vec![false; n];
+        let mut frontier: Vec<usize> = Vec::with_capacity(n.min(1024));
+        let mut next_frontier: Vec<usize> = Vec::with_capacity(n.min(1024));
         let mut result = HashMap::with_capacity(n);
 
         for start_i in 0..n {
-            visited.fill(false);
-            let mut sum_reciprocal = 0.0;
-            let mut queue = VecDeque::new();
-            visited[start_i] = true;
-            queue.push_back((start_i, 0u32));
-
-            while let Some((current, dist)) = queue.pop_front() {
-                if dist > 0 {
-                    sum_reciprocal += 1.0 / f64::from(dist);
+            if out_adj.neighbors(start_i).is_empty() {
+                if let Some(uuid) = view.get_uuid(NodeIndex::new(start_i)) {
+                    result.insert(uuid, 0.0);
                 }
-                for &next in out_adj.neighbors(current) {
-                    let next = next as usize;
-                    if !visited[next] {
-                        visited[next] = true;
-                        queue.push_back((next, dist + 1));
+                continue;
+            }
+            visited.fill(false);
+            frontier.clear();
+            next_frontier.clear();
+
+            visited[start_i] = true;
+            frontier.push(start_i);
+            let mut sum_reciprocal = 0.0;
+            let mut dist = 0u32;
+
+            while !frontier.is_empty() {
+                dist += 1;
+                let use_bottom_up = if allow_bottom_up {
+                    let frontier_edges: usize =
+                        frontier.iter().map(|&u| out_adj.neighbors(u).len()).sum();
+                    frontier_edges > bottom_up_edge_threshold
+                } else {
+                    false
+                };
+
+                if use_bottom_up {
+                    for &u in &frontier {
+                        in_frontier[u] = true;
+                    }
+                    for (v, vis) in visited.iter_mut().enumerate() {
+                        if !*vis
+                            && in_adj
+                                .neighbors(v)
+                                .iter()
+                                .any(|&pred| in_frontier[pred as usize])
+                        {
+                            *vis = true;
+                            next_frontier.push(v);
+                        }
+                    }
+                    for &u in &frontier {
+                        in_frontier[u] = false;
+                    }
+                } else {
+                    for &u in &frontier {
+                        for &w in out_adj.neighbors(u) {
+                            let w = w as usize;
+                            if !visited[w] {
+                                visited[w] = true;
+                                next_frontier.push(w);
+                            }
+                        }
                     }
                 }
+
+                if !next_frontier.is_empty() {
+                    sum_reciprocal += (next_frontier.len() as f64) / f64::from(dist);
+                }
+                std::mem::swap(&mut frontier, &mut next_frontier);
+                next_frontier.clear();
             }
 
             if let Some(uuid) = view.get_uuid(NodeIndex::new(start_i)) {
@@ -963,7 +1197,11 @@ impl CentralityAnalyzer {
 
         let pagerank_start = Instant::now();
         let pagerank_engine = FastPageRank::new(max_iters, self.damping).with_tolerance(tolerance);
-        let pagerank = pagerank_engine.compute_flat_only(&index);
+        let pagerank = if let [single_ty] = self.allowed_types.as_slice() {
+            pagerank_engine.compute_view_single_type(view, *single_ty).0
+        } else {
+            pagerank_engine.compute_flat_only(&index)
+        };
         approx_stats.pagerank_ms = pagerank_start.elapsed().as_millis() as u64;
 
         // Build outgoing adjacency once, after PageRank (which doesn't need it).
@@ -1512,5 +1750,87 @@ mod tests {
             !with_tests.iter().any(|(id, _)| *id == intrinsic),
             "ExternalIntrinsic must stay excluded when include_tests=true"
         );
+    }
+
+    #[test]
+    fn pull_pagerank_view_single_type_matches_flat_and_parallel() {
+        let mut backend = MemoryBackend::new();
+        let mut ids = Vec::with_capacity(120);
+        for i in 0..120 {
+            let n = Node::new(NodeType::Function, format!("fn_{i}"));
+            ids.push(n.id);
+            backend.insert_node(n).unwrap();
+        }
+        for i in 0..119 {
+            backend
+                .insert_edge(Edge::new(ids[i], ids[(i * 7 + 3) % 120], EdgeType::Calls))
+                .unwrap();
+            backend
+                .insert_edge(Edge::new(ids[i], ids[(i + 1) % 120], EdgeType::Contains))
+                .unwrap();
+        }
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
+        let pr = FastPageRank::new(25, 0.85);
+        let (flat_ranks, flat_stats) = pr.compute_flat(&index);
+        let (direct_ranks, direct_stats) = pr.compute_view_single_type(&view, EdgeType::Calls);
+        assert_eq!(flat_stats.iterations_run, direct_stats.iterations_run);
+        for (a, b) in flat_ranks.iter().zip(direct_ranks.iter()) {
+            assert!((a - b).abs() < 1e-12, "{a} != {b}");
+        }
+    }
+
+    #[test]
+    fn beamer_direction_optimizing_harmonic_matches_reference_bfs() {
+        let mut backend = MemoryBackend::new();
+        let n = 128usize;
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let node = Node::new(NodeType::Function, format!("f_{i}"));
+            ids.push(node.id);
+            backend.insert_node(node).unwrap();
+        }
+        // Dense fan-out hub graph (n >= 64, >1000 edges) so frontier_edges exceeds threshold.
+        for i in 0..n {
+            for step in 1..=12 {
+                let dst = (i * 5 + step) % n;
+                if dst != i {
+                    backend
+                        .insert_edge(Edge::new(ids[i], ids[dst], EdgeType::Calls))
+                        .unwrap();
+                }
+            }
+        }
+        let view = PetGraphView::from_backend(&backend).unwrap();
+        let got = HarmonicCentrality::compute(&view, &[EdgeType::Calls], 500);
+
+        let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
+        let out_adj = index.build_out_csr();
+        let norm = 1.0 / (n as f64 - 1.0);
+        for s in 0..n {
+            let mut visited = vec![false; n];
+            let mut q = std::collections::VecDeque::from([(s, 0u32)]);
+            visited[s] = true;
+            let mut sum = 0.0;
+            while let Some((u, d)) = q.pop_front() {
+                if d > 0 {
+                    sum += 1.0 / f64::from(d);
+                }
+                for &w in out_adj.neighbors(u) {
+                    let w = w as usize;
+                    if !visited[w] {
+                        visited[w] = true;
+                        q.push_back((w, d + 1));
+                    }
+                }
+            }
+            let uuid = view.get_uuid(NodeIndex::new(s)).unwrap();
+            let want = sum * norm;
+            let actual = got[&uuid];
+            assert!(
+                (actual - want).abs() < 1e-12,
+                "source {s}: actual={actual} want={want}"
+            );
+        }
     }
 }

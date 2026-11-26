@@ -7,7 +7,7 @@
 //! `find_nodes_by_name` uses the embedded name index (lazy-parsed) without hydrating a [`MemoryBackend`].
 
 use crate::backend::MemoryBackend;
-use crate::csr::{edge_type_from_u8, edge_type_to_u8};
+use crate::csr::{CodeGraphCsr, edge_type_from_u8, edge_type_to_u8};
 use crate::lazy_collections::LazyStringMap;
 use crate::normalize_path_str;
 use crate::schema::{Edge, EdgeType, GraphParameter, Node, NodeType, SharedStr};
@@ -39,10 +39,11 @@ pub fn reset_cold_ext_deserialization_count() {
 }
 /// Snapshot file format version for columnar layout.
 ///
-/// v4 packs 2 visibility bits into the `NodeRow.node_type` `u16` high bits
-/// (bits 14–15; `NodeType` ids stay below `0x3FFF`), enabling hot-column
-/// public/export classification without cold `NodeExtension` decodes.
-pub const COLUMNAR_SNAPSHOT_VERSION: u32 = 4;
+/// - v4 packs 2 visibility bits + declaration bit into `NodeRow.node_type` high bits.
+/// - v5 replaces 40-byte UUID `EdgeRow` records with aligned zero-copy bidirectional
+///   CSR arrays (`row_ptr`, `in_row_ptr`, `targets`, `in_targets`, `edge_types`,
+///   `in_edge_types`) plus a sparse edge-pad table. Older v2–v4 files remain readable.
+pub const COLUMNAR_SNAPSHOT_VERSION: u32 = 5;
 
 /// Mask isolating the `NodeType` id from the packed `NodeRow.node_type`.
 pub(crate) const NODE_TYPE_MASK: u16 = 0x0FFF;
@@ -56,8 +57,19 @@ const NODE_VISIBILITY_SHIFT: u16 = 14;
 const HEADER_SIZE: usize = 136;
 const NODE_ROW_SIZE: usize = 64;
 const EDGE_ROW_SIZE: usize = 40;
+const SPARSE_EDGE_PAD_SIZE: usize = 12;
 const _: () = assert!(std::mem::size_of::<NodeRow>() == NODE_ROW_SIZE);
 const _: () = assert!(std::mem::size_of::<EdgeRow>() == EDGE_ROW_SIZE);
+
+#[inline]
+const fn align4(n: usize) -> usize {
+    (n + 3) & !3
+}
+
+#[inline]
+const fn align8_u64(n: u64) -> u64 {
+    (n + 7) & !7
+}
 
 const DECL_LEN_NONE: u32 = u32::MAX;
 const OVERFLOW_NONE: (u32, u32) = (u32::MAX, u32::MAX);
@@ -545,12 +557,17 @@ pub struct ColumnarGraphMmap {
     offset_strings_len: u64,
     index_tail_off: usize,
     offset_extensions: u64,
+    /// Zero-copy bidirectional CSR for v5+ snapshots (`None` on legacy v2–v4 files).
+    csr: Option<CodeGraphCsr>,
+    /// Byte offset of sparse `(out_edge_idx: u32, pad: [u8; 7], _reserved: u8)` entries (v5+).
+    offset_edge_pads: usize,
+    edge_pad_count: usize,
     #[allow(clippy::type_complexity)]
     parsed_indexes: Mutex<Option<Arc<(HashMap<String, Vec<Uuid>>, HashMap<NodeType, Vec<Uuid>>)>>>,
 }
 
 impl ColumnarGraphMmap {
-    /// Open a v2 columnar snapshot from an already-mmapped file.
+    /// Open a columnar snapshot (v2–v5) from an already-mmapped file.
     pub fn open(mmap: Arc<Mmap>) -> Result<Self> {
         if mmap.len() < HEADER_SIZE {
             return Err(Error::SerdeError("columnar snapshot truncated".into()));
@@ -558,39 +575,130 @@ impl ColumnarGraphMmap {
         if mmap[0..4] != SNAPSHOT_MAGIC {
             return Err(Error::SerdeError("invalid graph snapshot magic".into()));
         }
-        let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
-        if !matches!(version, 2 | 3 | COLUMNAR_SNAPSHOT_VERSION) {
+        let version = u32::from_le_bytes([mmap[4], mmap[5], mmap[6], mmap[7]]);
+        if !(2..=COLUMNAR_SNAPSHOT_VERSION).contains(&version) {
             return Err(Error::SerdeError(format!(
-                "expected columnar snapshot version {}, got {version}",
+                "expected columnar snapshot version 2..={}, got {version}",
                 COLUMNAR_SNAPSHOT_VERSION
             )));
         }
 
-        let schema_version = u32::from_le_bytes(mmap[8..12].try_into().unwrap());
-        let node_count = u64::from_le_bytes(mmap[12..20].try_into().unwrap()) as usize;
-        let edge_count = u64::from_le_bytes(mmap[20..28].try_into().unwrap()) as usize;
+        let schema_version = u32::from_le_bytes([mmap[8], mmap[9], mmap[10], mmap[11]]);
+        let read_u64 = |off: usize| -> u64 {
+            let b = &mmap[off..off + 8];
+            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+        };
+        let node_count = read_u64(12) as usize;
+        let edge_count = read_u64(20) as usize;
         let digest = std::str::from_utf8(&mmap[28..92])
             .map_err(|_| Error::SerdeError("columnar digest utf8".into()))?
             .trim_end_matches('\0')
             .to_string();
 
-        let offset_nodes = u64::from_le_bytes(mmap[92..100].try_into().unwrap());
-        let offset_edges = u64::from_le_bytes(mmap[100..108].try_into().unwrap());
-        let offset_strings = u64::from_le_bytes(mmap[108..116].try_into().unwrap());
-        let offset_strings_len = u64::from_le_bytes(mmap[116..124].try_into().unwrap());
-        let offset_extensions = u64::from_le_bytes(mmap[128..136].try_into().unwrap());
+        let offset_nodes = read_u64(92);
+        let offset_edges = read_u64(100);
+        let offset_strings = read_u64(108);
+        let offset_strings_len = read_u64(116);
+        let offset_extensions = read_u64(128);
 
         let tail = &mmap[HEADER_SIZE..];
         let name_section = index_section_byte_len(tail, 0)?;
         index_section_byte_len(tail, name_section)?;
 
-        let expected_nodes_end = offset_nodes as usize + node_count * NODE_ROW_SIZE;
-        let expected_edges_end = offset_edges as usize + edge_count * EDGE_ROW_SIZE;
-        if expected_nodes_end > mmap.len() || expected_edges_end > mmap.len() {
+        let expected_nodes_end = (offset_nodes as usize)
+            .checked_add(
+                node_count
+                    .checked_mul(NODE_ROW_SIZE)
+                    .ok_or_else(|| Error::SerdeError("node column overflow".into()))?,
+            )
+            .ok_or_else(|| Error::SerdeError("node offset overflow".into()))?;
+        if expected_nodes_end > mmap.len() {
             return Err(Error::SerdeError(
                 "columnar snapshot column out of range".into(),
             ));
         }
+
+        let (csr, offset_edge_pads, edge_pad_count) = if version >= 5 {
+            let base = offset_edges as usize;
+            let ptr_bytes = node_count
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(4))
+                .ok_or_else(|| Error::SerdeError("CSR row_ptr size overflow".into()))?;
+            let edge_u32_bytes = edge_count
+                .checked_mul(4)
+                .ok_or_else(|| Error::SerdeError("CSR targets size overflow".into()))?;
+            let off_row_ptr = base;
+            let off_in_row_ptr = off_row_ptr
+                .checked_add(ptr_bytes)
+                .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?;
+            let off_targets = off_in_row_ptr
+                .checked_add(ptr_bytes)
+                .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?;
+            let off_in_targets = off_targets
+                .checked_add(edge_u32_bytes)
+                .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?;
+            let off_edge_types = off_in_targets
+                .checked_add(edge_u32_bytes)
+                .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?;
+            let off_in_edge_types = off_edge_types
+                .checked_add(edge_count)
+                .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?;
+            let off_pad_hdr = align4(
+                off_in_edge_types
+                    .checked_add(edge_count)
+                    .ok_or_else(|| Error::SerdeError("CSR offset overflow".into()))?,
+            );
+            if off_pad_hdr.saturating_add(4) > mmap.len() {
+                return Err(Error::SerdeError(
+                    "columnar snapshot CSR pad header out of range".into(),
+                ));
+            }
+            let pad_count = u32::from_le_bytes([
+                mmap[off_pad_hdr],
+                mmap[off_pad_hdr + 1],
+                mmap[off_pad_hdr + 2],
+                mmap[off_pad_hdr + 3],
+            ]) as usize;
+            let off_pads = off_pad_hdr + 4;
+            let end_pads = off_pads
+                .checked_add(
+                    pad_count
+                        .checked_mul(SPARSE_EDGE_PAD_SIZE)
+                        .ok_or_else(|| Error::SerdeError("CSR pad table overflow".into()))?,
+                )
+                .ok_or_else(|| Error::SerdeError("CSR pad offset overflow".into()))?;
+            if end_pads > mmap.len() {
+                return Err(Error::SerdeError(
+                    "columnar snapshot CSR pad table out of range".into(),
+                ));
+            }
+            let csr = CodeGraphCsr::from_mmap(
+                Arc::clone(&mmap),
+                node_count,
+                edge_count,
+                off_row_ptr,
+                off_in_row_ptr,
+                off_targets,
+                off_in_targets,
+                off_edge_types,
+                off_in_edge_types,
+            )?;
+            (Some(csr), off_pads, pad_count)
+        } else {
+            let expected_edges_end = (offset_edges as usize)
+                .checked_add(
+                    edge_count
+                        .checked_mul(EDGE_ROW_SIZE)
+                        .ok_or_else(|| Error::SerdeError("edge column overflow".into()))?,
+                )
+                .ok_or_else(|| Error::SerdeError("edge offset overflow".into()))?;
+            if expected_edges_end > mmap.len() {
+                return Err(Error::SerdeError(
+                    "columnar snapshot column out of range".into(),
+                ));
+            }
+            (None, 0, 0)
+        };
 
         Ok(Self {
             mmap,
@@ -605,6 +713,9 @@ impl ColumnarGraphMmap {
             offset_strings_len,
             index_tail_off: HEADER_SIZE,
             offset_extensions,
+            csr,
+            offset_edge_pads,
+            edge_pad_count,
             parsed_indexes: Mutex::new(None),
         })
     }
@@ -708,6 +819,27 @@ impl ColumnarGraphMmap {
         (0..self.node_count).filter_map(|idx| self.node_id_at(idx).ok().map(|id| (idx, id)))
     }
 
+    /// Borrow the zero-copy bidirectional CSR when backed by a v5+ snapshot.
+    #[inline]
+    pub fn csr(&self) -> Option<&CodeGraphCsr> {
+        self.csr.as_ref()
+    }
+
+    /// Cheaply clone the zero-copy CSR (`O(1)` `Arc::clone` on v5+ snapshots).
+    #[inline]
+    pub fn csr_cloned(&self) -> Option<CodeGraphCsr> {
+        self.csr.clone()
+    }
+
+    fn read_sparse_edge_pad(&self, entry_idx: usize) -> (u32, [u8; 7]) {
+        let off = self.offset_edge_pads + entry_idx * SPARSE_EDGE_PAD_SIZE;
+        let b = &self.mmap[off..off + SPARSE_EDGE_PAD_SIZE];
+        let out_edge_idx = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let mut pad = [0u8; 7];
+        pad.copy_from_slice(&b[4..11]);
+        (out_edge_idx, pad)
+    }
+
     /// Read typed edge topology directly from mmap columns.
     pub fn edge_topology_typed(&self) -> Result<Vec<(Uuid, Uuid, EdgeType)>> {
         let mut out = Vec::with_capacity(self.edge_count);
@@ -718,14 +850,100 @@ impl ColumnarGraphMmap {
         Ok(out)
     }
 
+    /// Stream directed edges as dense `(src_idx, dst_idx, EdgeType)` without UUID lookups.
+    pub fn for_each_edge_indexed(
+        &self,
+        mut f: impl FnMut(u32, u32, EdgeType) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(csr) = &self.csr {
+            for src in 0..self.node_count as u32 {
+                let (targets, types) = csr.out_neighbors(src);
+                for (i, &dst) in targets.iter().enumerate() {
+                    f(src, dst, edge_type_from_u8(types[i])?)?;
+                }
+            }
+            return Ok(());
+        }
+        for idx in 0..self.edge_count {
+            let (from, to, edge_type) = self.edge_at(idx)?;
+            if let (Some(src), Some(dst)) = (self.find_node_index(from), self.find_node_index(to)) {
+                f(src as u32, dst as u32, edge_type)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Stream edge rows without allocating a full topology `Vec`.
     pub fn for_each_edge(
         &self,
         mut f: impl FnMut(Uuid, Uuid, EdgeType) -> Result<()>,
     ) -> Result<()> {
+        if let Some(csr) = &self.csr {
+            for src in 0..self.node_count {
+                let (targets, types) = csr.out_neighbors(src as u32);
+                if targets.is_empty() {
+                    continue;
+                }
+                let from = self.node_id_at(src)?;
+                for (i, &dst) in targets.iter().enumerate() {
+                    let to = self.node_id_at(dst as usize)?;
+                    f(from, to, edge_type_from_u8(types[i])?)?;
+                }
+            }
+            return Ok(());
+        }
         for idx in 0..self.edge_count {
             let (from, to, edge_type) = self.edge_at(idx)?;
             f(from, to, edge_type)?;
+        }
+        Ok(())
+    }
+
+    /// Stream edges along with their optional 7-byte compact metadata pad.
+    pub(crate) fn for_each_edge_with_pad(
+        &self,
+        mut f: impl FnMut(Uuid, Uuid, EdgeType, [u8; 7]) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(csr) = &self.csr {
+            let rp = csr.row_ptr();
+            let targets = csr.targets();
+            let types = csr.edge_types();
+            let mut pad_cursor = 0usize;
+            let mut next_pad = (self.edge_pad_count > 0).then(|| self.read_sparse_edge_pad(0));
+
+            for src in 0..self.node_count {
+                let start = (rp[src] as usize).min(targets.len());
+                let end = (rp[src + 1] as usize).clamp(start, targets.len());
+                if start == end {
+                    continue;
+                }
+                let from = self.node_id_at(src)?;
+                for out_idx in start..end {
+                    let to = self.node_id_at(targets[out_idx] as usize)?;
+                    let et = edge_type_from_u8(types[out_idx])?;
+                    let pad = if let Some((p_idx, p_bytes)) = next_pad
+                        && p_idx as usize == out_idx
+                    {
+                        pad_cursor += 1;
+                        next_pad = (pad_cursor < self.edge_pad_count)
+                            .then(|| self.read_sparse_edge_pad(pad_cursor));
+                        p_bytes
+                    } else {
+                        [0u8; 7]
+                    };
+                    f(from, to, et, pad)?;
+                }
+            }
+            return Ok(());
+        }
+        for idx in 0..self.edge_count {
+            let row = read_edge_row(self.mmap.as_ref(), self.offset_edges as usize, idx)?;
+            f(
+                Uuid::from_bytes(row.from),
+                Uuid::from_bytes(row.to),
+                edge_type_from_u8(row.edge_type)?,
+                row._pad,
+            )?;
         }
         Ok(())
     }
@@ -737,6 +955,15 @@ impl ColumnarGraphMmap {
                 "edge index {idx} out of range (count={})",
                 self.edge_count
             )));
+        }
+        if let Some(csr) = &self.csr {
+            let rp = csr.row_ptr();
+            let src = rp
+                .partition_point(|&p| (p as usize) <= idx)
+                .saturating_sub(1);
+            let dst = csr.targets()[idx] as usize;
+            let ty = edge_type_from_u8(csr.edge_types()[idx])?;
+            return Ok((self.node_id_at(src)?, self.node_id_at(dst)?, ty));
         }
         let row = read_edge_row(self.mmap.as_ref(), self.offset_edges as usize, idx)?;
         Ok((
@@ -1036,7 +1263,7 @@ impl ColumnarGraphMmap {
         node_rows: &mut Vec<NodeRow>,
         scratch: &mut Vec<u8>,
     ) -> Result<()> {
-        if self.format_version == COLUMNAR_SNAPSHOT_VERSION {
+        if self.format_version >= 4 {
             let row = read_node_row(self.mmap.as_ref(), self.offset_nodes as usize, idx)?;
             let id = Uuid::from_bytes(row.id);
             // Masked: v4 rows pack visibility/declaration bits into the
@@ -1307,10 +1534,10 @@ impl ColumnarGraphMmap {
             nodes.push(self.materialize_node(idx)?);
         }
         let mut edges = Vec::with_capacity(self.edge_count);
-        for idx in 0..self.edge_count {
-            let row = read_edge_row(self.mmap.as_ref(), self.offset_edges as usize, idx)?;
-            edges.push(edge_from_row(&row)?);
-        }
+        self.for_each_edge_with_pad(|from, to, edge_type, pad| {
+            edges.push(edge_from_parts(from, to, edge_type, pad));
+            Ok(())
+        })?;
         Ok(PreparedGraphSnapshot {
             schema_version: self.schema_version,
             nodes,
@@ -1322,18 +1549,22 @@ impl ColumnarGraphMmap {
 }
 
 impl PreparedGraphSnapshot {
-    /// Write columnar v2 snapshot (default write path).
+    /// Write columnar snapshot (default write path).
     pub fn write_columnar_to_path(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
+        let mut sorted_nodes: Vec<&Node> = self.nodes.iter().collect();
+        sorted_nodes.sort_by_key(|n| n.id);
+        sorted_nodes.dedup_by_key(|n| n.id);
+
         let mut strings = StringPool::new();
-        let mut node_rows = Vec::with_capacity(self.nodes.len());
+        let mut node_rows = Vec::with_capacity(sorted_nodes.len());
         let mut extensions_blob = Vec::new();
         let mut ext_scratch = Vec::with_capacity(256);
 
-        for node in &self.nodes {
+        for node in sorted_nodes {
             let name_off = strings.intern(&node.name);
             let file_path_off = strings.intern_opt(node.file_path.as_deref());
             let signature_off = strings.intern_opt(node.signature.as_deref());
@@ -1354,62 +1585,39 @@ impl PreparedGraphSnapshot {
             ));
         }
 
-        let mut edge_rows = Vec::with_capacity(self.edges.len());
+        let mut edge_meta: Vec<(Uuid, Uuid, u8, [u8; 7])> = Vec::with_capacity(self.edges.len());
         for edge in &self.edges {
-            edge_rows.push(EdgeRow {
-                from: *edge.from.as_bytes(),
-                to: *edge.to.as_bytes(),
-                edge_type: edge_type_to_u8(edge.edge_type),
-                _pad: encode_edge_pad(edge),
-            });
+            edge_meta.push((
+                edge.from,
+                edge.to,
+                edge_type_to_u8(edge.edge_type),
+                encode_edge_pad(edge),
+            ));
         }
+        edge_meta.sort_by_key(|e| (e.0, e.1, e.2, e.3));
+        edge_meta.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1 && a.2 == b.2);
 
-        let name_index_bytes = bincode::serialize(&self.indexes.name_index).map_err(bincode_err)?;
-        let type_index_bytes = bincode::serialize(&self.indexes.type_index).map_err(bincode_err)?;
-
-        let offset_nodes = HEADER_SIZE as u64
-            + 8
-            + name_index_bytes.len() as u64
-            + 8
-            + type_index_bytes.len() as u64;
-        let offset_edges = offset_nodes + (node_rows.len() * NODE_ROW_SIZE) as u64;
-        let offset_strings = offset_edges + (edge_rows.len() * EDGE_ROW_SIZE) as u64;
-        let offset_strings_len = strings.bytes.len() as u64;
-        let offset_extensions = offset_strings + offset_strings_len;
-
-        let mut digest_bytes = [0u8; 64];
-        let digest_src = self.content_digest.as_bytes();
-        let copy_len = digest_src.len().min(64);
-        digest_bytes[..copy_len].copy_from_slice(&digest_src[..copy_len]);
-
-        let mut file = Vec::new();
-        file.extend_from_slice(&SNAPSHOT_MAGIC);
-        file.extend_from_slice(&COLUMNAR_SNAPSHOT_VERSION.to_le_bytes());
-        file.extend_from_slice(&self.schema_version.to_le_bytes());
-        file.extend_from_slice(&(self.nodes.len() as u64).to_le_bytes());
-        file.extend_from_slice(&(self.edges.len() as u64).to_le_bytes());
-        file.extend_from_slice(&digest_bytes);
-        file.extend_from_slice(&offset_nodes.to_le_bytes());
-        file.extend_from_slice(&offset_edges.to_le_bytes());
-        file.extend_from_slice(&offset_strings.to_le_bytes());
-        file.extend_from_slice(&offset_strings_len.to_le_bytes());
-        file.extend_from_slice(&[0u8; 4]); // reserved
-        file.extend_from_slice(&offset_extensions.to_le_bytes());
-        debug_assert_eq!(file.len(), HEADER_SIZE);
-
-        file.extend_from_slice(&(name_index_bytes.len() as u64).to_le_bytes());
-        file.extend_from_slice(&name_index_bytes);
-        file.extend_from_slice(&(type_index_bytes.len() as u64).to_le_bytes());
-        file.extend_from_slice(&type_index_bytes);
-
-        for row in &node_rows {
-            file.extend_from_slice(&encode_node_row(row));
+        let mut indexed_edges = Vec::with_capacity(edge_meta.len());
+        let mut cached_from: Option<([u8; 16], u32)> = None;
+        for (from, to, code, pad) in edge_meta {
+            let from_bytes = *from.as_bytes();
+            let src = match cached_from {
+                Some((prev, idx)) if prev == from_bytes => idx,
+                _ => {
+                    let Some(idx) = find_node_row_index(&node_rows, &from_bytes) else {
+                        continue;
+                    };
+                    cached_from = Some((from_bytes, idx));
+                    idx
+                }
+            };
+            let Some(dst) = find_node_row_index(&node_rows, to.as_bytes()) else {
+                continue;
+            };
+            indexed_edges.push((src, dst, code, pad));
         }
-        for row in &edge_rows {
-            file.extend_from_slice(&encode_edge_row(row));
-        }
-        file.extend_from_slice(&strings.bytes);
-        file.extend_from_slice(&extensions_blob);
+        let (csr, sparse_pads) =
+            CodeGraphCsr::from_indexed_edges_with_pads(node_rows.len(), &indexed_edges);
 
         let tmp = path.with_file_name(format!(
             "{}.tmp",
@@ -1417,7 +1625,18 @@ impl PreparedGraphSnapshot {
                 .map(|n| n.to_string_lossy())
                 .unwrap_or_else(|| "graph.snapshot.bin".into())
         ));
-        std::fs::write(&tmp, &file)?;
+        write_columnar_assembled_csr_with_schema(
+            &tmp,
+            self.schema_version,
+            &node_rows,
+            &csr,
+            &sparse_pads,
+            &strings,
+            &extensions_blob,
+            &self.indexes.name_index,
+            &self.indexes.type_index,
+            &self.content_digest,
+        )?;
         std::fs::rename(&tmp, path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp);
         })?;
@@ -1656,7 +1875,7 @@ fn encode_node_row(row: &NodeRow) -> [u8; NODE_ROW_SIZE] {
     buf
 }
 
-fn encode_edge_pad(edge: &Edge) -> [u8; 7] {
+pub(crate) fn encode_edge_pad(edge: &Edge) -> [u8; 7] {
     if edge.properties.is_empty() {
         return [0u8; 7];
     }
@@ -1691,17 +1910,12 @@ fn encode_edge_pad(edge: &Edge) -> [u8; 7] {
     pad
 }
 
-fn edge_from_row(row: &EdgeRow) -> Result<Edge> {
-    let edge_type = edge_type_from_u8(row.edge_type)?;
-    let mut edge = Edge::new(
-        Uuid::from_bytes(row.from),
-        Uuid::from_bytes(row.to),
-        edge_type,
-    );
-    if row._pad != [0u8; 7] {
+fn edge_from_parts(from: Uuid, to: Uuid, edge_type: EdgeType, pad: [u8; 7]) -> Edge {
+    let mut edge = Edge::new(from, to, edge_type);
+    if pad != [0u8; 7] {
         if edge_type == EdgeType::CoChangesWith {
-            let count = u16::from_le_bytes([row._pad[0], row._pad[1]]);
-            let jaccard_bp = u16::from_le_bytes([row._pad[2], row._pad[3]]);
+            let count = u16::from_le_bytes([pad[0], pad[1]]);
+            let jaccard_bp = u16::from_le_bytes([pad[2], pad[3]]);
             if count > 0 || jaccard_bp > 0 {
                 edge.properties
                     .insert("cochange_count".to_string(), count.to_string());
@@ -1711,19 +1925,20 @@ fn edge_from_row(row: &EdgeRow) -> Result<Edge> {
                 );
             }
         }
-        if row._pad[4] == 1 {
+        if pad[4] == 1 {
             edge.properties
                 .insert("cross_repo".to_string(), "true".to_string());
         }
-        let line = u16::from_le_bytes([row._pad[5], row._pad[6]]);
+        let line = u16::from_le_bytes([pad[5], pad[6]]);
         if line > 0 {
             edge.properties
                 .insert("call_site_line".to_string(), line.to_string());
         }
     }
-    Ok(edge)
+    edge
 }
 
+#[cfg(test)]
 fn encode_edge_row(row: &EdgeRow) -> [u8; EDGE_ROW_SIZE] {
     let mut buf = [0u8; EDGE_ROW_SIZE];
     buf[0..16].copy_from_slice(&row.from);
@@ -1731,6 +1946,15 @@ fn encode_edge_row(row: &EdgeRow) -> [u8; EDGE_ROW_SIZE] {
     buf[32] = row.edge_type;
     buf[33..40].copy_from_slice(&row._pad);
     buf
+}
+
+/// Binary-search sorted `node_rows` for `target_id` bytes (`O(log N)`).
+#[inline]
+pub(crate) fn find_node_row_index(node_rows: &[NodeRow], target_id: &[u8; 16]) -> Option<u32> {
+    node_rows
+        .binary_search_by(|row| row.id.cmp(target_id))
+        .ok()
+        .map(|i| i as u32)
 }
 
 pub(crate) fn node_type_to_u16(t: NodeType) -> u16 {
@@ -1942,11 +2166,56 @@ fn node_to_row(
     }
 }
 
+fn extend_u32_le_slice(buf: &mut Vec<u8>, slice: &[u32]) {
+    #[cfg(target_endian = "little")]
+    {
+        // SAFETY: `u32` has no uninitialized padding bytes and native LE matches wire LE.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4) };
+        buf.extend_from_slice(bytes);
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        buf.reserve(slice.len() * 4);
+        for &v in slice {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn write_columnar_assembled(
+pub(crate) fn write_columnar_assembled_csr(
     path: &Path,
     node_rows: &[NodeRow],
-    edge_rows: &[EdgeRow],
+    csr: &CodeGraphCsr,
+    sparse_pads: &[(u32, [u8; 7])],
+    strings: &StringPool,
+    extensions_blob: &[u8],
+    name_index: &HashMap<String, Vec<Uuid>>,
+    type_index: &HashMap<NodeType, Vec<Uuid>>,
+    content_digest: &str,
+) -> Result<()> {
+    write_columnar_assembled_csr_with_schema(
+        path,
+        crate::schema::GRAPH_SCHEMA_VERSION,
+        node_rows,
+        csr,
+        sparse_pads,
+        strings,
+        extensions_blob,
+        name_index,
+        type_index,
+        content_digest,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_columnar_assembled_csr_with_schema(
+    path: &Path,
+    schema_version: u32,
+    node_rows: &[NodeRow],
+    csr: &CodeGraphCsr,
+    sparse_pads: &[(u32, [u8; 7])],
     strings: &StringPool,
     extensions_blob: &[u8],
     name_index: &HashMap<String, Vec<Uuid>>,
@@ -1960,22 +2229,28 @@ pub(crate) fn write_columnar_assembled(
     let name_index_bytes = bincode::serialize(name_index).map_err(bincode_err)?;
     let type_index_bytes = bincode::serialize(type_index).map_err(bincode_err)?;
 
-    let offset_nodes =
+    let node_count = node_rows.len();
+    let edge_count = csr.edge_count();
+    debug_assert_eq!(csr.node_count(), node_count);
+
+    let raw_after_indexes =
         HEADER_SIZE as u64 + 8 + name_index_bytes.len() as u64 + 8 + type_index_bytes.len() as u64;
-    let offset_edges = offset_nodes + (node_rows.len() * NODE_ROW_SIZE) as u64;
-    let offset_strings = offset_edges + (edge_rows.len() * EDGE_ROW_SIZE) as u64;
+    // Align `offset_nodes` to 8 bytes so `offset_edges` (`offset_nodes + 64 * N`) is also
+    // 8-byte aligned for zero-copy `&[u32]` CSR slice borrows from `Mmap`.
+    let offset_nodes = align8_u64(raw_after_indexes);
+    let pre_nodes_pad = (offset_nodes - raw_after_indexes) as usize;
+    let offset_edges = offset_nodes + (node_count * NODE_ROW_SIZE) as u64;
+
+    let csr_unaligned_bytes = (node_count + 1) * 4 * 2 + edge_count * 4 * 2 + edge_count * 2;
+    let csr_aligned_bytes = align4(csr_unaligned_bytes);
+    let csr_pad = csr_aligned_bytes - csr_unaligned_bytes;
+    let csr_total_bytes = csr_aligned_bytes + 4 + sparse_pads.len() * SPARSE_EDGE_PAD_SIZE;
+
+    let offset_strings = offset_edges + csr_total_bytes as u64;
     let offset_strings_len = strings.bytes.len() as u64;
     let offset_extensions = offset_strings + offset_strings_len;
 
-    let total_bytes = HEADER_SIZE
-        + 8
-        + name_index_bytes.len()
-        + 8
-        + type_index_bytes.len()
-        + node_rows.len() * NODE_ROW_SIZE
-        + edge_rows.len() * EDGE_ROW_SIZE
-        + strings.bytes.len()
-        + extensions_blob.len();
+    let total_bytes = offset_extensions as usize + extensions_blob.len();
 
     let mut digest_bytes = [0u8; 64];
     let digest_src = content_digest.as_bytes();
@@ -1985,9 +2260,9 @@ pub(crate) fn write_columnar_assembled(
     let mut file = Vec::with_capacity(total_bytes);
     file.extend_from_slice(&SNAPSHOT_MAGIC);
     file.extend_from_slice(&COLUMNAR_SNAPSHOT_VERSION.to_le_bytes());
-    file.extend_from_slice(&crate::schema::GRAPH_SCHEMA_VERSION.to_le_bytes());
-    file.extend_from_slice(&(node_rows.len() as u64).to_le_bytes());
-    file.extend_from_slice(&(edge_rows.len() as u64).to_le_bytes());
+    file.extend_from_slice(&schema_version.to_le_bytes());
+    file.extend_from_slice(&(node_count as u64).to_le_bytes());
+    file.extend_from_slice(&(edge_count as u64).to_le_bytes());
     file.extend_from_slice(&digest_bytes);
     file.extend_from_slice(&offset_nodes.to_le_bytes());
     file.extend_from_slice(&offset_edges.to_le_bytes());
@@ -2001,21 +2276,87 @@ pub(crate) fn write_columnar_assembled(
     file.extend_from_slice(&name_index_bytes);
     file.extend_from_slice(&(type_index_bytes.len() as u64).to_le_bytes());
     file.extend_from_slice(&type_index_bytes);
+    if pre_nodes_pad > 0 {
+        file.extend_from_slice(&[0u8; 8][..pre_nodes_pad]);
+    }
+    debug_assert_eq!(file.len() as u64, offset_nodes);
 
     for row in node_rows {
         file.extend_from_slice(&encode_node_row(row));
     }
-    for row in edge_rows {
-        file.extend_from_slice(&encode_edge_row(row));
+    debug_assert_eq!(file.len() as u64, offset_edges);
+
+    extend_u32_le_slice(&mut file, csr.row_ptr());
+    extend_u32_le_slice(&mut file, csr.in_row_ptr());
+    extend_u32_le_slice(&mut file, csr.targets());
+    extend_u32_le_slice(&mut file, csr.in_targets());
+    file.extend_from_slice(csr.edge_types());
+    file.extend_from_slice(csr.in_edge_types());
+    if csr_pad > 0 {
+        file.extend_from_slice(&[0u8; 4][..csr_pad]);
     }
+    file.extend_from_slice(&(sparse_pads.len() as u32).to_le_bytes());
+    for &(out_edge_idx, pad) in sparse_pads {
+        file.extend_from_slice(&out_edge_idx.to_le_bytes());
+        file.extend_from_slice(&pad);
+        file.push(0u8);
+    }
+    debug_assert_eq!(file.len() as u64, offset_strings);
+
     file.extend_from_slice(&strings.bytes);
     file.extend_from_slice(extensions_blob);
+    debug_assert_eq!(file.len(), total_bytes);
 
     std::fs::write(path, file)?;
     Ok(())
 }
 
-/// Write a columnar v2 snapshot from owned node/edge vectors (no [`MemoryBackend`]).
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_columnar_assembled(
+    path: &Path,
+    node_rows: &[NodeRow],
+    edge_rows: &[EdgeRow],
+    strings: &StringPool,
+    extensions_blob: &[u8],
+    name_index: &HashMap<String, Vec<Uuid>>,
+    type_index: &HashMap<NodeType, Vec<Uuid>>,
+    content_digest: &str,
+) -> Result<()> {
+    let mut indexed_edges = Vec::with_capacity(edge_rows.len());
+    let mut cached_from: Option<([u8; 16], u32)> = None;
+    for row in edge_rows {
+        let src = match cached_from {
+            Some((prev, idx)) if prev == row.from => idx,
+            _ => {
+                let Some(idx) = find_node_row_index(node_rows, &row.from) else {
+                    continue;
+                };
+                cached_from = Some((row.from, idx));
+                idx
+            }
+        };
+        let Some(dst) = find_node_row_index(node_rows, &row.to) else {
+            continue;
+        };
+        indexed_edges.push((src, dst, row.edge_type, row._pad));
+    }
+    let (csr, sparse_pads) =
+        CodeGraphCsr::from_indexed_edges_with_pads(node_rows.len(), &indexed_edges);
+    write_columnar_assembled_csr(
+        path,
+        node_rows,
+        &csr,
+        &sparse_pads,
+        strings,
+        extensions_blob,
+        name_index,
+        type_index,
+        content_digest,
+    )
+}
+
+/// Write a columnar snapshot from owned node/edge vectors (no [`MemoryBackend`]).
 ///
 /// Digests match [`write_columnar_from_backend`]: nodes sorted by id; edges sorted by
 /// `(from, to, type)`; BLAKE3 over bincode of each node then each edge.
@@ -2059,24 +2400,43 @@ pub fn write_columnar_from_nodes_edges(
     }
     drop(nodes);
 
-    let mut edge_rows = Vec::with_capacity(edges.len());
+    let mut indexed_edges: Vec<(u32, u32, u8, [u8; 7])> = Vec::with_capacity(edges.len());
+    let mut cached_from: Option<([u8; 16], u32)> = None;
     for edge in &edges {
+        let from_bytes = *edge.from.as_bytes();
+        let src = match cached_from {
+            Some((prev, idx)) if prev == from_bytes => idx,
+            _ => {
+                let Some(idx) = find_node_row_index(&node_rows, &from_bytes) else {
+                    continue;
+                };
+                cached_from = Some((from_bytes, idx));
+                idx
+            }
+        };
+        let Some(dst) = find_node_row_index(&node_rows, edge.to.as_bytes()) else {
+            continue;
+        };
         let bytes = edge_digest_bytes(edge)?;
         hasher.update(&bytes);
-        edge_rows.push(EdgeRow {
-            from: *edge.from.as_bytes(),
-            to: *edge.to.as_bytes(),
-            edge_type: edge_type_to_u8(edge.edge_type),
-            _pad: encode_edge_pad(edge),
-        });
+        indexed_edges.push((
+            src,
+            dst,
+            edge_type_to_u8(edge.edge_type),
+            encode_edge_pad(edge),
+        ));
     }
     drop(edges);
 
     let content_digest = hasher.finalize().to_hex().to_string();
-    write_columnar_assembled(
+    let (csr, sparse_pads) =
+        CodeGraphCsr::from_indexed_edges_with_pads(node_rows.len(), &indexed_edges);
+    drop(indexed_edges);
+    write_columnar_assembled_csr(
         path,
         &node_rows,
-        &edge_rows,
+        &csr,
+        &sparse_pads,
         &strings,
         &extensions_blob,
         &name_index,
@@ -2086,7 +2446,7 @@ pub fn write_columnar_from_nodes_edges(
     Ok(content_digest)
 }
 
-/// Write a columnar v2 snapshot directly from a live [`MemoryBackend`].
+/// Write a columnar snapshot directly from a live [`MemoryBackend`].
 ///
 /// Unlike [`PreparedGraphSnapshot::from_backend`], this does **not** allocate a second
 /// full `Vec<Node>` / `Vec<Edge>` clone. Nodes/edges are encoded while holding backend
@@ -2126,24 +2486,38 @@ pub fn write_columnar_from_backend(backend: &MemoryBackend, path: &Path) -> Resu
     edge_meta.sort_by_key(|a| (a.0, a.1, edge_type_to_u8(a.2), a.3));
     edge_meta.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1 && a.2 == b.2);
 
-    let mut edge_rows = Vec::with_capacity(edge_meta.len());
+    let mut indexed_edges: Vec<(u32, u32, u8, [u8; 7])> = Vec::with_capacity(edge_meta.len());
+    let mut cached_from: Option<([u8; 16], u32)> = None;
     for (from, to, edge_type, pad) in &edge_meta {
+        let from_bytes = *from.as_bytes();
+        let src = match cached_from {
+            Some((prev, idx)) if prev == from_bytes => idx,
+            _ => {
+                let Some(idx) = find_node_row_index(&node_rows, &from_bytes) else {
+                    continue;
+                };
+                cached_from = Some((from_bytes, idx));
+                idx
+            }
+        };
+        let Some(dst) = find_node_row_index(&node_rows, to.as_bytes()) else {
+            continue;
+        };
         let canonical = Edge::new(*from, *to, *edge_type);
         hasher.update(&edge_digest_bytes(&canonical)?);
-        edge_rows.push(EdgeRow {
-            from: *from.as_bytes(),
-            to: *to.as_bytes(),
-            edge_type: edge_type_to_u8(*edge_type),
-            _pad: *pad,
-        });
+        indexed_edges.push((src, dst, edge_type_to_u8(*edge_type), *pad));
     }
     drop(edge_meta);
 
     let content_digest = hasher.finalize().to_hex().to_string();
-    write_columnar_assembled(
+    let (csr, sparse_pads) =
+        CodeGraphCsr::from_indexed_edges_with_pads(node_rows.len(), &indexed_edges);
+    drop(indexed_edges);
+    write_columnar_assembled_csr(
         path,
         &node_rows,
-        &edge_rows,
+        &csr,
+        &sparse_pads,
         &strings,
         &extensions_blob,
         &name_index,
@@ -2860,5 +3234,166 @@ mod tests {
             .unwrap();
         assert_eq!(stats2.nodes_dropped, 2);
         assert_eq!(stats2.nodes_kept, 0);
+    }
+
+    #[test]
+    fn v4_legacy_edge_row_snapshot_still_readable() {
+        let mut a = Node::new(NodeType::Function, "alpha").with_file_path("a.rs");
+        let mut b = Node::new(NodeType::Function, "beta").with_file_path("b.rs");
+        if a.id > b.id {
+            std::mem::swap(&mut a.id, &mut b.id);
+        }
+        let edge = Edge::new(a.id, b.id, EdgeType::Calls)
+            .with_property("call_site_line".into(), "77".into());
+
+        let mut hasher = blake3::Hasher::new();
+        let mut strings = StringPool::new();
+        let mut extensions_blob = Vec::new();
+        let mut name_index = HashMap::new();
+        let mut type_index = HashMap::new();
+        let mut node_rows = Vec::new();
+        let mut scratch = Vec::new();
+        for node in [&a, &b] {
+            append_node_columnar(
+                node,
+                &mut hasher,
+                &mut strings,
+                &mut extensions_blob,
+                &mut name_index,
+                &mut type_index,
+                &mut node_rows,
+                &mut scratch,
+            )
+            .unwrap();
+        }
+        hasher.update(&edge_digest_bytes(&edge).unwrap());
+        let digest = hasher.finalize().to_hex().to_string();
+
+        let edge_row = EdgeRow {
+            from: *edge.from.as_bytes(),
+            to: *edge.to.as_bytes(),
+            edge_type: edge_type_to_u8(edge.edge_type),
+            _pad: encode_edge_pad(&edge),
+        };
+        let name_index_bytes = bincode::serialize(&name_index).unwrap();
+        let type_index_bytes = bincode::serialize(&type_index).unwrap();
+        let offset_nodes = HEADER_SIZE as u64
+            + 8
+            + name_index_bytes.len() as u64
+            + 8
+            + type_index_bytes.len() as u64;
+        let offset_edges = offset_nodes + (node_rows.len() * NODE_ROW_SIZE) as u64;
+        let offset_strings = offset_edges + EDGE_ROW_SIZE as u64;
+        let offset_strings_len = strings.bytes.len() as u64;
+        let offset_extensions = offset_strings + offset_strings_len;
+
+        let mut digest_bytes = [0u8; 64];
+        digest_bytes[..digest.len()].copy_from_slice(digest.as_bytes());
+
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&SNAPSHOT_MAGIC);
+        raw.extend_from_slice(&4u32.to_le_bytes());
+        raw.extend_from_slice(&crate::schema::GRAPH_SCHEMA_VERSION.to_le_bytes());
+        raw.extend_from_slice(&2u64.to_le_bytes());
+        raw.extend_from_slice(&1u64.to_le_bytes());
+        raw.extend_from_slice(&digest_bytes);
+        raw.extend_from_slice(&offset_nodes.to_le_bytes());
+        raw.extend_from_slice(&offset_edges.to_le_bytes());
+        raw.extend_from_slice(&offset_strings.to_le_bytes());
+        raw.extend_from_slice(&offset_strings_len.to_le_bytes());
+        raw.extend_from_slice(&[0u8; 4]);
+        raw.extend_from_slice(&offset_extensions.to_le_bytes());
+        raw.extend_from_slice(&(name_index_bytes.len() as u64).to_le_bytes());
+        raw.extend_from_slice(&name_index_bytes);
+        raw.extend_from_slice(&(type_index_bytes.len() as u64).to_le_bytes());
+        raw.extend_from_slice(&type_index_bytes);
+        for r in &node_rows {
+            raw.extend_from_slice(&encode_node_row(r));
+        }
+        raw.extend_from_slice(&encode_edge_row(&edge_row));
+        raw.extend_from_slice(&strings.bytes);
+        raw.extend_from_slice(&extensions_blob);
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v4.bin");
+        std::fs::write(&path, raw).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: test file is read-only.
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        assert_eq!(col.format_version(), 4);
+        assert!(col.csr().is_none());
+        assert_eq!(col.edge_at(0).unwrap(), (a.id, b.id, EdgeType::Calls));
+        let prepared = col.to_prepared().unwrap();
+        assert_eq!(
+            prepared.edges[0]
+                .properties
+                .get("call_site_line")
+                .map(String::as_str),
+            Some("77")
+        );
+    }
+
+    #[test]
+    fn v5_csr_zero_copy_and_sparse_pad_round_trip() {
+        let a = Node::new(NodeType::Function, "alpha").with_file_path("a.rs");
+        let b = Node::new(NodeType::Function, "beta").with_file_path("b.rs");
+        let f = Node::new(NodeType::File, "a.rs").with_file_path("a.rs");
+        let call = Edge::new(a.id, b.id, EdgeType::Calls)
+            .with_property("call_site_line".into(), "42".into());
+        let cochange = Edge::new(f.id, a.id, EdgeType::CoChangesWith)
+            .with_property("cochange_count".into(), "7".into())
+            .with_property("jaccard".into(), "0.2500".into());
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v5.bin");
+        write_columnar_from_nodes_edges(
+            vec![a.clone(), b.clone(), f.clone()],
+            vec![call, cochange],
+            &path,
+        )
+        .unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: test file is read-only.
+        let mmap = Arc::new(unsafe { Mmap::map(&file).unwrap() });
+        let col = ColumnarGraphMmap::open(mmap).unwrap();
+        assert_eq!(col.format_version(), 5);
+        let csr = col.csr().expect("v5 snapshot must expose zero-copy CSR");
+        let a_idx = col.find_node_index(a.id).unwrap() as u32;
+        let b_idx = col.find_node_index(b.id).unwrap() as u32;
+        assert_eq!(csr.out_neighbors_of_type(a_idx, EdgeType::Calls), &[b_idx]);
+        assert_eq!(csr.in_neighbors_of_type(b_idx, EdgeType::Calls), &[a_idx]);
+
+        let prepared = col.to_prepared().unwrap();
+        let restored_call = prepared
+            .edges
+            .iter()
+            .find(|e| e.edge_type == EdgeType::Calls)
+            .unwrap();
+        assert_eq!(
+            restored_call
+                .properties
+                .get("call_site_line")
+                .map(String::as_str),
+            Some("42")
+        );
+        let restored_cc = prepared
+            .edges
+            .iter()
+            .find(|e| e.edge_type == EdgeType::CoChangesWith)
+            .unwrap();
+        assert_eq!(
+            restored_cc
+                .properties
+                .get("cochange_count")
+                .map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            restored_cc.properties.get("jaccard").map(String::as_str),
+            Some("0.2500")
+        );
     }
 }

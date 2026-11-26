@@ -56,8 +56,8 @@ This document specifies the **Program Dependence Graph (PDG) and Reaching-Defini
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Program Dependence Graph (PDG)** | Ferrante, Ottenstein & Warren (1987), *The Program Dependence Graph and Its Use in Optimization* (*ACM TOPLAS*, 9(3)) | [`ProgramDependenceGraph::build`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs#L1-L240) unifies statement-level control dependence edges and def-use data dependence edges into a single directed multigraph over `PdgNode` vertices. |
-| **Reaching Definitions Dataflow Equations** | Kildall (1973), *A Unified Approach to Global Program Optimization*; Dragon Book §9.2 | [`DataflowAnalyzer`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dataflow.rs#L1-L210) solves the forward monotone dataflow equations $\text{IN}[b] = \bigcup_{p \in \text{pred}(b)} \text{OUT}[p]$ and $\text{OUT}[b] = \text{GEN}[b] \cup (\text{IN}[b] \setminus \text{KILL}[b])$ over basic blocks, evaluating intra-block statements in execution order (RHS uses resolved against incoming reaching definitions before LHS kill/gen updates). |
+| **Program Dependence Graph (PDG)** | Ferrante, Ottenstein & Warren (1987), *The Program Dependence Graph and Its Use in Optimization* (*ACM TOPLAS*, 9(3)) | [`ProgramDependenceGraph::build`](../../crates/rgctl-analysis/src/pdg.rs#L1-L240) unifies statement-level control dependence edges and def-use data dependence edges into a single directed multigraph over `PdgNode` vertices. |
+| **Reaching Definitions Dataflow Equations** | Kildall (1973), *A Unified Approach to Global Program Optimization*; Dragon Book §9.2 | [`DataflowAnalyzer`](../../crates/rgctl-analysis/src/dataflow.rs#L1-L210) solves the forward monotone dataflow equations $\text{IN}[b] = \bigcup_{p \in \text{pred}(b)} \text{OUT}[p]$ and $\text{OUT}[b] = \text{GEN}[b] \cup (\text{IN}[b] \setminus \text{KILL}[b])$ over basic blocks, evaluating intra-block statements in execution order (RHS uses resolved against incoming reaching definitions before LHS kill/gen updates). |
 | **Lexical Scope Disambiguation (`(name, scope_id)`)** | Static Single Assignment (SSA) / Alpha-renaming (Cytron et al., 1991) | Each variable definition is keyed by `(String, u32)` (`(variable_name, lexical_scope_id)`). A shadowed declaration `let x = ...` in an inner block (`scope_id = 2`) does not kill or alias the outer `x` (`scope_id = 0`), while mutations `x = x + 1` resolve to the innermost active `scope_id` for `x`. |
 | **Loop-Carried Data Dependence Classification** | Allen & Kennedy (2001), *Optimizing Compilers for Modern Architectures* | When `PdgBuildOptions::classify_loop_carried` (`rgctl discover --with-dfg-loops`) is enabled, `PdgBuilder` marks `DataDependency.loop_carried = true` whenever the use block can reach the definition block along a CFG cycle containing a `LoopBack` edge. |
 
@@ -93,7 +93,7 @@ pub struct ControlDependency {
 
 ### 3.2 Storage in `.rgctl/analysis/cfg_pdg.archive.bin` (`RBCP` v3)
 
-- Every [`CfgPdgRecord`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs#L52-L75) in `cfg_pdg.archive.bin` bundles `cfg: Arc<ControlFlowGraph>` and `pdg: Arc<ProgramDependenceGraph>` in a single `bincode` payload indexed by the 32-byte `TocEntry` footer (`TOC_ENTRY_SIZE = 32`, `TOC_TRAILER_SIZE = 16`).
+- Every [`CfgPdgRecord`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs#L52-L75) in `cfg_pdg.archive.bin` bundles `cfg: Arc<ControlFlowGraph>` and `pdg: Arc<ProgramDependenceGraph>` in a single `bincode` payload indexed by the 32-byte `TocEntry` footer (`TOC_ENTRY_SIZE = 32`, `TOC_TRAILER_SIZE = 16`).
 - **On-Demand Single-Function Build (`ensure_cfg_pdg_for_source`):** Running `rgctl slice` or `rgctl cpg flows` on a repository discovered without `--with-cfg` builds only the target function's CFG + PDG and appends it to `cfg_pdg.archive.bin`.
 
 ---
@@ -102,7 +102,7 @@ pub struct ControlDependency {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs#L71-L94):
+Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](../../src/cli/inspect.rs#L71-L94):
 
 ```bash
 # Inspect full PDG (both data and control dependencies)
@@ -121,7 +121,7 @@ rgctl discover . --with-cfg --with-dfg-loops
 
 ### 4.2 JSON Schema (`rgctl inspect <symbol> pdg --def-use -f json`)
 
-Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs):
+Implemented in [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs):
 
 ```json
 {
@@ -166,11 +166,11 @@ Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **PDG Builder & Graph** | [`crates/rgctl-analysis/src/pdg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs) | `ProgramDependenceGraph`, `PdgNode`, `DataDependency`, `ControlDependency`, `PdgBuildOptions` |
-| **Reaching Definitions Dataflow** | [`crates/rgctl-analysis/src/dataflow.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dataflow.rs), [`def_use.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/def_use.rs) | `DataflowAnalyzer`, `ReachingDefinitions`, `DefUseChain` |
-| **Local May-Alias Expansion** | [`crates/rgctl-analysis/src/alias.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/alias.rs) | `may_alias_names` (invoked when `--with-alias` is passed to `slice` or `cpg flows`) |
-| **v3 Archive Persistence** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgRecord`, `CfgPdgArchiveMmap`, `ensure_cfg_pdg_for_source` |
-| **CLI Inspect Command** | [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs), [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs) | `InspectLayer::Pdg`, `PdgEdgeLayer`, `inspect_pdg_json` |
+| **PDG Builder & Graph** | [`crates/rgctl-analysis/src/pdg.rs`](../../crates/rgctl-analysis/src/pdg.rs) | `ProgramDependenceGraph`, `PdgNode`, `DataDependency`, `ControlDependency`, `PdgBuildOptions` |
+| **Reaching Definitions Dataflow** | [`crates/rgctl-analysis/src/dataflow.rs`](../../crates/rgctl-analysis/src/dataflow.rs), [`def_use.rs`](../../crates/rgctl-analysis/src/def_use.rs) | `DataflowAnalyzer`, `ReachingDefinitions`, `DefUseChain` |
+| **Local May-Alias Expansion** | [`crates/rgctl-analysis/src/alias.rs`](../../crates/rgctl-analysis/src/alias.rs) | `may_alias_names` (invoked when `--with-alias` is passed to `slice` or `cpg flows`) |
+| **v3 Archive Persistence** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgRecord`, `CfgPdgArchiveMmap`, `ensure_cfg_pdg_for_source` |
+| **CLI Inspect Command** | [`src/cli/inspect.rs`](../../src/cli/inspect.rs), [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs) | `InspectLayer::Pdg`, `PdgEdgeLayer`, `inspect_pdg_json` |
 
 ---
 

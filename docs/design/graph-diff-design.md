@@ -54,9 +54,9 @@ This document specifies the **Columnar Graph Snapshot Diff and Temporal PR Delta
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Content-Addressable Merkle Short-Circuit** | Merkle (1987), *A Digital Signature Based on a Conventional Encryption Function* | [`SnapshotPair::digest_equal`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/snapshot_diff.rs#L37-L39) compares the 32-byte BLAKE3 `content_digest` stored in the 136-byte `RGCL` v2 header (`offset 72..104`) in $O(1)$ time before touching node or edge tables. |
-| **Location-Independent Structural Node Identity** | Lippert & Roslyn Team (2012), *Red-Green Syntax Trees* (separating syntax identity from physical offsets) | [`stable_key_from_facets`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/stable_key.rs#L91-L115) hashes `(normalized_file_path, name, node_type, qualified_name)` into a 64-bit `StableNodeKey` (and deterministic UUIDv5 via `NAMESPACE_RGCTL`), intentionally omitting `start_line` and `start_byte` so inserting lines at the top of a file never causes false symbol deletions/additions. |
-| **Span-Excluding Cold Extension Digest** | Differential dataflow / semantic hash invariance | [`extension_digest_excluding_spans`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/node_extension.rs#L149-L179) strips the 14-byte Green span tail (`SPAN_EXTENSION_TAIL_BYTES = 14`: `decl_byte_len`, `name_span_overflow`, `name_token_len`) before hashing `NodeExtension` bytes, so pure formatting/offset shifts do not mark unchanged symbols as `Changed`. |
+| **Content-Addressable Merkle Short-Circuit** | Merkle (1987), *A Digital Signature Based on a Conventional Encryption Function* | [`SnapshotPair::digest_equal`](../../crates/rgctl-graph/src/snapshot_diff.rs#L37-L39) compares the 32-byte BLAKE3 `content_digest` stored in the 136-byte `RGCL` v2 header (`offset 72..104`) in $O(1)$ time before touching node or edge tables. |
+| **Location-Independent Structural Node Identity** | Lippert & Roslyn Team (2012), *Red-Green Syntax Trees* (separating syntax identity from physical offsets) | [`stable_key_from_facets`](../../crates/rgctl-graph/src/stable_key.rs#L91-L115) hashes `(normalized_file_path, name, node_type, qualified_name)` into a 64-bit `StableNodeKey` (and deterministic UUIDv5 via `NAMESPACE_RGCTL`), intentionally omitting `start_line` and `start_byte` so inserting lines at the top of a file never causes false symbol deletions/additions. |
+| **Span-Excluding Cold Extension Digest** | Differential dataflow / semantic hash invariance | [`extension_digest_excluding_spans`](../../crates/rgctl-graph/src/node_extension.rs#L149-L179) strips the 14-byte Green span tail (`SPAN_EXTENSION_TAIL_BYTES = 14`: `decl_byte_len`, `name_span_overflow`, `name_token_len`) before hashing `NodeExtension` bytes, so pure formatting/offset shifts do not mark unchanged symbols as `Changed`. |
 | **Sort-Merge Join over CSR Edge Streams** | Graefe (1993), *Query Evaluation Techniques for Large Databases* | Instead of building multi-gigabyte `HashSet<(Uuid, Uuid, EdgeType)>` tables, `diff_snapshots` projects base and head edges into flat `(StableNodeKey, StableNodeKey, EdgeType)` vectors, sorts them in parallel (`par_sort_unstable`), and runs a cache-linear two-pointer merge-join. |
 
 ---
@@ -107,7 +107,7 @@ When synthesizing a head snapshot incrementally (`rgctl update`, `rgctl review p
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl diff --help`, `rgctl review --help`, and [`src/cli/diff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/diff.rs):
+Verified against `rgctl diff --help`, `rgctl review --help`, and [`src/cli/diff.rs`](../../src/cli/diff.rs):
 
 ```bash
 # Direct structural diff between two snapshots or .rgctl directories
@@ -149,11 +149,11 @@ rgctl review export --base-ref origin/main --head-ref HEAD --stdout -f json
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Snapshot Pair & Structural Diff** | [`crates/rgctl-graph/src/snapshot_diff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/snapshot_diff.rs) | `SnapshotPair`, `diff_snapshots`, `DiffSink`, `DiffStats`, `NodeDeltaEvent`, `EdgeDeltaEvent` |
-| **Cross-Snapshot Stable Key** | [`crates/rgctl-graph/src/stable_key.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/stable_key.rs) | `StableNodeKey`, `NodeRowRef`, `stable_key_from_facets`, `stable_key_from_row`, `extension_digest` |
-| **Span-Excluding Extension Digest** | [`crates/rgctl-graph/src/node_extension.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/node_extension.rs) | `extension_digest_excluding_spans`, `SPAN_EXTENSION_TAIL_BYTES` (`14`) |
-| **Incremental PR Scope & Cascade** | [`crates/rgctl-incremental/src/lib.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-incremental/src/lib.rs) | `IncrementalUpdater`, `incoming_callers_files_depth` |
-| **CLI Diff & Review Commands** | [`src/cli/diff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/diff.rs), [`src/cli/review.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/review.rs), [`src/cli/pr_check.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/pr_check.rs) | `DiffArgs`, `ReviewCommands`, `run` |
+| **Snapshot Pair & Structural Diff** | [`crates/rgctl-graph/src/snapshot_diff.rs`](../../crates/rgctl-graph/src/snapshot_diff.rs) | `SnapshotPair`, `diff_snapshots`, `DiffSink`, `DiffStats`, `NodeDeltaEvent`, `EdgeDeltaEvent` |
+| **Cross-Snapshot Stable Key** | [`crates/rgctl-graph/src/stable_key.rs`](../../crates/rgctl-graph/src/stable_key.rs) | `StableNodeKey`, `NodeRowRef`, `stable_key_from_facets`, `stable_key_from_row`, `extension_digest` |
+| **Span-Excluding Extension Digest** | [`crates/rgctl-graph/src/node_extension.rs`](../../crates/rgctl-graph/src/node_extension.rs) | `extension_digest_excluding_spans`, `SPAN_EXTENSION_TAIL_BYTES` (`14`) |
+| **Incremental PR Scope & Cascade** | [`crates/rgctl-incremental/src/lib.rs`](../../crates/rgctl-incremental/src/lib.rs) | `IncrementalUpdater`, `incoming_callers_files_depth` |
+| **CLI Diff & Review Commands** | [`src/cli/diff.rs`](../../src/cli/diff.rs), [`src/cli/review.rs`](../../src/cli/review.rs), [`src/cli/pr_check.rs`](../../src/cli/pr_check.rs) | `DiffArgs`, `ReviewCommands`, `run` |
 
 ---
 

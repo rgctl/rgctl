@@ -6,7 +6,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RBGR";
 const COLUMNAR_VERSION_V2: u32 = 2;
 const COLUMNAR_VERSION_V3: u32 = 3;
+#[cfg(test)]
 const COLUMNAR_VERSION_V4: u32 = 4;
+const COLUMNAR_VERSION_V5: u32 = 5;
 /// Mask isolating the `NodeType` id from the packed `NodeRow.node_type`
 /// (v4 packs 1 declaration bit + 2 visibility bits into the high bits;
 /// v2/v3 rows carry zero high bits, so the mask is a no-op there).
@@ -135,12 +137,9 @@ impl ColumnarView {
             return Err("invalid graph payload magic (expected RBGR columnar v2)".into());
         }
         let format_version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        if !matches!(
-            format_version,
-            COLUMNAR_VERSION_V2 | COLUMNAR_VERSION_V3 | COLUMNAR_VERSION_V4
-        ) {
+        if !(COLUMNAR_VERSION_V2..=COLUMNAR_VERSION_V5).contains(&format_version) {
             return Err(format!(
-                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION_V2}, {COLUMNAR_VERSION_V3} or {COLUMNAR_VERSION_V4})"
+                "unsupported payload format version {format_version} (expected {COLUMNAR_VERSION_V2}..={COLUMNAR_VERSION_V5})"
             ));
         }
 
@@ -154,7 +153,11 @@ impl ColumnarView {
         let offset_extensions = u64::from_le_bytes(bytes[128..136].try_into().unwrap());
 
         let expected_nodes_end = offset_nodes as usize + node_count * NODE_ROW_SIZE;
-        let expected_edges_end = offset_edges as usize + edge_count * EDGE_ROW_SIZE;
+        let expected_edges_end = if format_version >= COLUMNAR_VERSION_V5 {
+            offset_edges as usize + (node_count + 1) * 8 + edge_count * 10
+        } else {
+            offset_edges as usize + edge_count * EDGE_ROW_SIZE
+        };
         if expected_nodes_end > bytes.len() || expected_edges_end > bytes.len() {
             return Err("columnar snapshot column out of range".into());
         }
@@ -229,23 +232,37 @@ impl ColumnarView {
         }
 
         let mut edges = Vec::new();
-        for edge_idx in 0..self.edge_count {
-            let row = read_edge_row(&self.bytes, self.offset_edges as usize, edge_idx)?;
-            if row.edge_type != CALLS_EDGE {
-                continue;
+        if self.format_version >= COLUMNAR_VERSION_V5 {
+            for &from in &filtered {
+                for to in self.v5_out_calls(from) {
+                    if set.contains(&to) {
+                        edges.push(SubgraphEdge {
+                            source: from,
+                            target: to,
+                            edge_type: CALLS_EDGE,
+                        });
+                    }
+                }
             }
-            let Some(&from) = self.uuid_to_index.get(&row.from) else {
-                continue;
-            };
-            let Some(&to) = self.uuid_to_index.get(&row.to) else {
-                continue;
-            };
-            if set.contains(&from) && set.contains(&to) {
-                edges.push(SubgraphEdge {
-                    source: from,
-                    target: to,
-                    edge_type: row.edge_type,
-                });
+        } else {
+            for edge_idx in 0..self.edge_count {
+                let row = read_edge_row(&self.bytes, self.offset_edges as usize, edge_idx)?;
+                if row.edge_type != CALLS_EDGE {
+                    continue;
+                }
+                let Some(&from) = self.uuid_to_index.get(&row.from) else {
+                    continue;
+                };
+                let Some(&to) = self.uuid_to_index.get(&row.to) else {
+                    continue;
+                };
+                if set.contains(&from) && set.contains(&to) {
+                    edges.push(SubgraphEdge {
+                        source: from,
+                        target: to,
+                        edge_type: row.edge_type,
+                    });
+                }
             }
         }
 
@@ -362,8 +379,52 @@ impl ColumnarView {
         })
     }
 
+    fn v5_csr_offsets(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let base = self.offset_edges as usize;
+        let ptr_bytes = (self.node_count + 1) * 4;
+        let edge_u32_bytes = self.edge_count * 4;
+        let off_rp = base;
+        let off_irp = off_rp + ptr_bytes;
+        let off_t = off_irp + ptr_bytes;
+        let off_it = off_t + edge_u32_bytes;
+        let off_et = off_it + edge_u32_bytes;
+        let off_iet = off_et + self.edge_count;
+        (off_rp, off_irp, off_t, off_it, off_et, off_iet)
+    }
+
+    fn v5_read_u32(&self, byte_off: usize) -> u32 {
+        let b = &self.bytes[byte_off..byte_off + 4];
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    }
+
+    fn v5_out_calls(&self, u: u32) -> impl Iterator<Item = u32> + '_ {
+        let (off_rp, _, off_t, _, off_et, _) = self.v5_csr_offsets();
+        let u = u as usize;
+        let start = self.v5_read_u32(off_rp + u * 4) as usize;
+        let end = self.v5_read_u32(off_rp + (u + 1) * 4) as usize;
+        (start..end)
+            .filter(move |&i| self.bytes[off_et + i] == CALLS_EDGE)
+            .map(move |i| self.v5_read_u32(off_t + i * 4))
+    }
+
+    fn v5_in_calls(&self, u: u32) -> impl Iterator<Item = u32> + '_ {
+        let (_, off_irp, _, off_it, _, off_iet) = self.v5_csr_offsets();
+        let u = u as usize;
+        let start = self.v5_read_u32(off_irp + u * 4) as usize;
+        let end = self.v5_read_u32(off_irp + (u + 1) * 4) as usize;
+        (start..end)
+            .filter(move |&i| self.bytes[off_iet + i] == CALLS_EDGE)
+            .map(move |i| self.v5_read_u32(off_it + i * 4))
+    }
+
     fn caller_adjacency(&self) -> Vec<Vec<u32>> {
         let mut adj = vec![Vec::new(); self.node_count];
+        if self.format_version >= COLUMNAR_VERSION_V5 {
+            for to in 0..self.node_count as u32 {
+                adj[to as usize].extend(self.v5_in_calls(to));
+            }
+            return adj;
+        }
         for edge_idx in 0..self.edge_count {
             let Ok(row) = read_edge_row(&self.bytes, self.offset_edges as usize, edge_idx) else {
                 continue;
@@ -665,24 +726,27 @@ mod tests {
     }
 
     #[test]
-    fn columnar_view_accepts_v2_v3_and_v4_headers() {
+    fn columnar_view_accepts_v2_through_v5_headers() {
         fn empty_header(version: u32) -> Vec<u8> {
-            let mut buf = vec![0u8; HEADER_SIZE];
+            let csr_tail = if version >= COLUMNAR_VERSION_V5 { 8 } else { 0 };
+            let mut buf = vec![0u8; HEADER_SIZE + csr_tail];
             buf[0..4].copy_from_slice(&SNAPSHOT_MAGIC);
             buf[4..8].copy_from_slice(&version.to_le_bytes());
             buf[8..12].copy_from_slice(&1u32.to_le_bytes());
             let off = (HEADER_SIZE as u64).to_le_bytes();
             buf[92..100].copy_from_slice(&off);
             buf[100..108].copy_from_slice(&off);
-            buf[108..116].copy_from_slice(&off);
-            buf[128..136].copy_from_slice(&off);
+            let str_off = ((HEADER_SIZE + csr_tail) as u64).to_le_bytes();
+            buf[108..116].copy_from_slice(&str_off);
+            buf[128..136].copy_from_slice(&str_off);
             buf
         }
 
         assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V2)).is_ok());
         assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V3)).is_ok());
         assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V4)).is_ok());
-        assert!(ColumnarView::open(empty_header(5)).is_err());
+        assert!(ColumnarView::open(empty_header(COLUMNAR_VERSION_V5)).is_ok());
+        assert!(ColumnarView::open(empty_header(6)).is_err());
     }
 
     #[test]
@@ -712,7 +776,7 @@ mod tests {
         // Plain function, public function, private function, internal
         // function, declaration-bit function — all must read as Function.
         let bytes = v4_with_function_rows(&[0x0000, 0x4000, 0x8000, 0xC000, 0x1000]);
-        let view = ColumnarView::open(bytes.clone()).expect("v4 snapshot opens");
+        let _view = ColumnarView::open(bytes.clone()).expect("v4 snapshot opens");
         let base = u64::from_le_bytes(bytes[92..100].try_into().unwrap()) as usize;
         for idx in 0..5usize {
             let row = read_node_row(&bytes, base, idx).expect("row");

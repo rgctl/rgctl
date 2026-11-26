@@ -5,8 +5,10 @@
 //! - Prefix / suffix / contains name patterns: O(|name keys|) scan of the HashMap keys.
 //! - `--scope` on `qualified_name`: per-candidate node filter (no dedicated prefix index yet).
 //! - Seedless edge scan: sequential typed-edge walk via [`SnapshotNodeStore::for_each_edge`].
-//! - Seeded multi-hop: builds a typed adjacency map once per invocation (O(E_type)).
+//! - Seeded `callers` / `callees` / `relations`: O(log N + visited neighborhood) via zero-copy
+//!   bidirectional CSR slices on v5+ snapshots (fallback O(E_type) on legacy stores).
 
+use crate::csr::edge_type_to_u8;
 use crate::schema::{EdgeType, Node, NodeType, SharedStr};
 use crate::snapshot::SnapshotNodeStore;
 use rgctl_error::{Error, Result};
@@ -526,7 +528,8 @@ impl<'a> StructuredQuery<'a> {
     pub fn resolve_symbol(&self, symbol: &str, filters: &QueryFilters) -> Result<Node> {
         let mut seed_filters = filters.clone();
         seed_filters.scope = None;
-        let mut matches = self.lookup_name_candidates(symbol, filters.exact)?;
+        let need_cold = Self::filters_need_cold_ext(&seed_filters);
+        let mut matches = self.lookup_name_candidates(symbol, filters.exact, need_cold)?;
         matches.retain(|n| self.node_passes(n, &seed_filters));
         if matches.len() > 1 && filters.scope.is_some() && filters.scope_mode == ScopeMode::Inside {
             let scoped: Vec<Node> = matches
@@ -548,11 +551,32 @@ impl<'a> StructuredQuery<'a> {
                 .filter(|(_, n)| is_aggregate_container_type(n.node_type))
                 .map(|(i, _)| i)
                 .collect();
-            let all_others_are_ctors = matches.iter().all(|n| {
-                is_aggregate_container_type(n.node_type) || is_same_name_constructor_node(n)
-            });
-            if non_ctor_types.len() == 1 && all_others_are_ctors {
-                return Ok(matches.swap_remove(non_ctor_types[0]));
+            if non_ctor_types.len() == 1 {
+                let mut all_others_are_ctors = matches.iter().all(|n| {
+                    is_aggregate_container_type(n.node_type) || is_same_name_constructor_node(n)
+                });
+                if !all_others_are_ctors && !need_cold {
+                    // Hydrate cold properties only on the rare Function candidates that
+                    // could carry `is_constructor` / `kind=constructor` without a QN match.
+                    all_others_are_ctors = true;
+                    for n in &matches {
+                        if !is_aggregate_container_type(n.node_type)
+                            && !is_same_name_constructor_node(n)
+                        {
+                            let cold_ctor = self
+                                .store
+                                .get_node(n.id)?
+                                .is_some_and(|cn| is_same_name_constructor_node(&cn));
+                            if !cold_ctor {
+                                all_others_are_ctors = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if all_others_are_ctors {
+                    return Ok(matches.swap_remove(non_ctor_types[0]));
+                }
             }
         }
         match matches.len() {
@@ -580,9 +604,28 @@ impl<'a> StructuredQuery<'a> {
         }
     }
 
-    fn lookup_name_candidates(&self, symbol: &str, exact: bool) -> Result<Vec<Node>> {
+    fn load_node_by_id(&self, id: Uuid, need_cold: bool) -> Result<Option<Node>> {
+        if !need_cold && let Some(col) = self.store.columnar() {
+            let Some(idx) = col.find_node_index(id) else {
+                return Ok(None);
+            };
+            let mut n = col.materialize_node_hot_at(idx)?;
+            if let Some(qn) = col.node_qualified_name_str(idx)? {
+                n.qualified_name = Some(SharedStr::from(qn.to_string()));
+            }
+            return Ok(Some(n));
+        }
+        self.store.get_node(id)
+    }
+
+    fn lookup_name_candidates(
+        &self,
+        symbol: &str,
+        exact: bool,
+        need_cold: bool,
+    ) -> Result<Vec<Node>> {
         if let Ok(uuid) = Uuid::parse_str(symbol)
-            && let Some(n) = self.store.get_node(uuid)?
+            && let Some(n) = self.load_node_by_id(uuid, need_cold)?
         {
             return Ok(vec![n]);
         }
@@ -591,7 +634,7 @@ impl<'a> StructuredQuery<'a> {
                 if let Some(ids) = indexes.0.get(symbol) {
                     let mut out = Vec::with_capacity(ids.len());
                     for id in ids {
-                        if let Some(n) = self.store.get_node(*id)? {
+                        if let Some(n) = self.load_node_by_id(*id, need_cold)? {
                             out.push(n);
                         }
                     }
@@ -615,7 +658,7 @@ impl<'a> StructuredQuery<'a> {
         for (name, ids) in indexes.0.iter() {
             if glob_match(symbol, name) {
                 for id in ids {
-                    if let Some(n) = self.store.get_node(*id)? {
+                    if let Some(n) = self.load_node_by_id(*id, need_cold)? {
                         out.push(n);
                     }
                 }
@@ -648,7 +691,8 @@ impl<'a> StructuredQuery<'a> {
         }
 
         let candidates = if let Some(pat) = pattern {
-            let mut c = self.lookup_name_candidates(pat, filters.exact)?;
+            let need_cold = Self::filters_need_cold_ext(filters);
+            let mut c = self.lookup_name_candidates(pat, filters.exact, need_cold)?;
             c.retain(|n| self.node_passes(n, filters));
             c
         } else {
@@ -752,6 +796,64 @@ impl<'a> StructuredQuery<'a> {
         let mut seen = HashSet::new();
         let mut matched_annots: HashMap<Uuid, Vec<String>> = HashMap::new();
         let mut candidates: Vec<Node> = Vec::new();
+        if let Some((col, csr)) = self
+            .store
+            .columnar()
+            .and_then(|c| c.csr().map(|csr| (c, csr)))
+        {
+            let need_cold = Self::filters_need_cold_ext(filters) || filters.show_attributes;
+            for dst_idx in 0..col.node_count() {
+                let srcs = csr.in_neighbors_of_type(dst_idx as u32, EdgeType::AnnotatedWith);
+                if srcs.is_empty() {
+                    continue;
+                }
+                let mut ann = col.materialize_node_hot_at(dst_idx)?;
+                if let Some(qn) = col.node_qualified_name_str(dst_idx)? {
+                    ann.qualified_name = Some(SharedStr::from(qn.to_string()));
+                }
+                if !normalized
+                    .iter()
+                    .any(|want| annotation_name_matches(&ann, want))
+                {
+                    continue;
+                }
+                let simple = annotation_simple_tail(ann.name.as_str()).to_string();
+                for &src_u32 in srcs {
+                    let src_idx = src_u32 as usize;
+                    let from = col.node_id_at(src_idx)?;
+                    let list = matched_annots.entry(from).or_default();
+                    if !list.contains(&simple) {
+                        list.push(simple.clone());
+                    }
+                    if !seen.insert(from) {
+                        continue;
+                    }
+                    let src = if need_cold {
+                        col.materialize_node_at(src_idx)?
+                    } else {
+                        let mut n = col.materialize_node_hot_at(src_idx)?;
+                        if let Some(qn) = col.node_qualified_name_str(src_idx)? {
+                            n.qualified_name = Some(SharedStr::from(qn.to_string()));
+                        }
+                        n
+                    };
+                    if let Some(pat) = pattern {
+                        let ok = if filters.exact || !is_glob_pattern(pat) {
+                            src.name == pat
+                        } else {
+                            glob_match(pat, &src.name)
+                        };
+                        if !ok {
+                            continue;
+                        }
+                    }
+                    if self.node_passes(&src, filters) {
+                        candidates.push(src);
+                    }
+                }
+            }
+            return Self::finish_find_annotated(candidates, filters, &normalized, &matched_annots);
+        }
         self.store.for_each_edge(|from, to, et| {
             if et != EdgeType::AnnotatedWith {
                 return Ok(());
@@ -921,44 +1023,91 @@ impl<'a> StructuredQuery<'a> {
     ) -> Result<CallNeighborsResult> {
         let seed = self.resolve_symbol(symbol, filters)?;
         let depth = depth.max(1);
-        let adj = self.build_typed_adjacency(EdgeType::Calls)?;
-        let mut seen = HashSet::from([seed.id]);
-        let mut q = VecDeque::from([(seed.id, 0usize)]);
-        if is_aggregate_container_type(seed.node_type) {
-            for member_id in self.collect_member_functions_of_type(&seed)? {
-                if seen.insert(member_id) {
-                    q.push_back((member_id, 0usize));
+        let mut found: Vec<(Uuid, usize)> = Vec::new();
+        if let Some((col, csr)) = self
+            .store
+            .columnar()
+            .and_then(|c| c.csr().map(|csr| (c, csr)))
+        {
+            if let Some(seed_idx) = col.find_node_index(seed.id) {
+                let mut seen_idx = HashSet::from([seed_idx as u32]);
+                let mut q = VecDeque::from([(seed_idx as u32, 0usize)]);
+                if is_aggregate_container_type(seed.node_type) {
+                    for member_id in self.collect_member_functions_of_type(&seed)? {
+                        if let Some(m_idx) = col.find_node_index(member_id)
+                            && seen_idx.insert(m_idx as u32)
+                        {
+                            q.push_back((m_idx as u32, 0usize));
+                        }
+                    }
+                }
+                while let Some((u, d)) = q.pop_front() {
+                    if d >= depth {
+                        continue;
+                    }
+                    let nexts = if incoming {
+                        csr.in_neighbors_of_type(u, EdgeType::Calls)
+                    } else {
+                        csr.out_neighbors_of_type(u, EdgeType::Calls)
+                    };
+                    for &v in nexts {
+                        if !seen_idx.insert(v) {
+                            continue;
+                        }
+                        let hop = d + 1;
+                        found.push((col.node_id_at(v as usize)?, hop));
+                        if hop < depth {
+                            q.push_back((v, hop));
+                        }
+                    }
+                }
+                if incoming && is_aggregate_container_type(seed.node_type) {
+                    for &v in csr.in_neighbors_of_type(seed_idx as u32, EdgeType::Injects) {
+                        if seen_idx.insert(v) {
+                            found.push((col.node_id_at(v as usize)?, 1));
+                        }
+                    }
                 }
             }
-        }
-        let mut found: Vec<(Uuid, usize)> = Vec::new();
-        while let Some((id, d)) = q.pop_front() {
-            if d >= depth {
-                continue;
+        } else {
+            let adj = self.build_typed_adjacency(EdgeType::Calls)?;
+            let mut seen = HashSet::from([seed.id]);
+            let mut q = VecDeque::from([(seed.id, 0usize)]);
+            if is_aggregate_container_type(seed.node_type) {
+                for member_id in self.collect_member_functions_of_type(&seed)? {
+                    if seen.insert(member_id) {
+                        q.push_back((member_id, 0usize));
+                    }
+                }
             }
-            let nexts = if incoming {
-                adj.incoming.get(&id)
-            } else {
-                adj.outgoing.get(&id)
-            };
-            let Some(nexts) = nexts else { continue };
-            for &nid in nexts {
-                if !seen.insert(nid) {
+            while let Some((id, d)) = q.pop_front() {
+                if d >= depth {
                     continue;
                 }
-                let hop = d + 1;
-                found.push((nid, hop));
-                if hop < depth {
-                    q.push_back((nid, hop));
+                let nexts = if incoming {
+                    adj.incoming.get(&id)
+                } else {
+                    adj.outgoing.get(&id)
+                };
+                let Some(nexts) = nexts else { continue };
+                for &nid in nexts {
+                    if !seen.insert(nid) {
+                        continue;
+                    }
+                    let hop = d + 1;
+                    found.push((nid, hop));
+                    if hop < depth {
+                        q.push_back((nid, hop));
+                    }
                 }
             }
-        }
-        if incoming && is_aggregate_container_type(seed.node_type) {
-            let inj = self.build_typed_adjacency(EdgeType::Injects)?;
-            if let Some(injectors) = inj.incoming.get(&seed.id) {
-                for &nid in injectors {
-                    if seen.insert(nid) {
-                        found.push((nid, 1));
+            if incoming && is_aggregate_container_type(seed.node_type) {
+                let inj = self.build_typed_adjacency(EdgeType::Injects)?;
+                if let Some(injectors) = inj.incoming.get(&seed.id) {
+                    for &nid in injectors {
+                        if seen.insert(nid) {
+                            found.push((nid, 1));
+                        }
                     }
                 }
             }
@@ -966,9 +1115,25 @@ impl<'a> StructuredQuery<'a> {
 
         let mut neighbors = Vec::new();
         let mut hops = Vec::new();
+        let col_hot = self
+            .store
+            .columnar()
+            .filter(|_| !Self::filters_need_cold_ext(filters));
         for (id, hop) in &found {
-            let Some(n) = self.store.get_node(*id)? else {
-                continue;
+            let n = if let Some(col) = col_hot {
+                let Some(idx) = col.find_node_index(*id) else {
+                    continue;
+                };
+                let mut node = col.materialize_node_hot_at(idx)?;
+                if let Some(qn) = col.node_qualified_name_str(idx)? {
+                    node.qualified_name = Some(SharedStr::from(qn.to_string()));
+                }
+                node
+            } else {
+                let Some(node) = self.store.get_node(*id)? else {
+                    continue;
+                };
+                node
             };
             if let Some(prefix) = filters.scope.as_deref() {
                 let keep = match filters.scope_mode {
@@ -1113,82 +1278,178 @@ impl<'a> StructuredQuery<'a> {
     ) -> Result<RelationsResult> {
         let seed = self.resolve_symbol(symbol, filters)?;
         let depth = depth.max(1);
-        let adj = self.build_typed_adjacency(edge)?;
         let mut agg: HashMap<(Uuid, Uuid, bool), EdgeRow> = HashMap::new();
 
-        let walk = |incoming: bool, agg: &mut HashMap<(Uuid, Uuid, bool), EdgeRow>| -> Result<()> {
-            let mut seen = HashSet::from([seed.id]);
-            let mut q = VecDeque::from([(seed.id, 0usize)]);
-            while let Some((id, d)) = q.pop_front() {
-                if d >= depth {
-                    continue;
-                }
-                let nexts = if incoming {
-                    adj.incoming.get(&id)
+        if let Some((col, csr)) = self
+            .store
+            .columnar()
+            .and_then(|c| c.csr().map(|csr| (c, csr)))
+        {
+            let need_cold = Self::filters_need_cold_ext(filters);
+            let load_at = |idx: usize| -> Result<Node> {
+                if need_cold {
+                    col.materialize_node_at(idx)
                 } else {
-                    adj.outgoing.get(&id)
-                };
-                let Some(nexts) = nexts else { continue };
-                for &nid in nexts {
-                    let hop = d + 1;
-                    let (src_id, dst_id) = if incoming { (nid, id) } else { (id, nid) };
-                    let Some(src) = self.store.get_node(src_id)? else {
-                        continue;
-                    };
-                    let Some(dst) = self.store.get_node(dst_id)? else {
-                        continue;
-                    };
-                    if let Some(ft) = from_type
-                        && src.node_type != ft
-                    {
-                        continue;
+                    let mut n = col.materialize_node_hot_at(idx)?;
+                    if let Some(qn) = col.node_qualified_name_str(idx)? {
+                        n.qualified_name = Some(SharedStr::from(qn.to_string()));
                     }
-                    if let Some(tt) = to_type
-                        && dst.node_type != tt
-                    {
-                        continue;
-                    }
-                    if !Self::edge_scope_ok(
-                        &src,
-                        &dst,
-                        filters.scope.as_deref(),
-                        filters.scope_mode,
-                    ) {
-                        continue;
-                    }
-                    let key = (src_id, dst_id, incoming);
-                    agg.entry(key)
-                        .and_modify(|row| {
-                            row.occurrences = row.occurrences.saturating_add(1);
-                            // Keep the shortest hop when collapsing duplicates.
-                            if let (Some(h), Some(prev)) = (Some(hop), row.hops)
-                                && h < prev
+                    Ok(n)
+                }
+            };
+            if let Some(seed_idx) = col.find_node_index(seed.id) {
+                let walk_csr = |incoming: bool,
+                                agg: &mut HashMap<(Uuid, Uuid, bool), EdgeRow>|
+                 -> Result<()> {
+                    let mut seen = HashSet::from([seed_idx as u32]);
+                    let mut q = VecDeque::from([(seed_idx as u32, 0usize)]);
+                    while let Some((u, d)) = q.pop_front() {
+                        if d >= depth {
+                            continue;
+                        }
+                        let nexts = if incoming {
+                            csr.in_neighbors_of_type(u, edge)
+                        } else {
+                            csr.out_neighbors_of_type(u, edge)
+                        };
+                        for &v in nexts {
+                            let hop = d + 1;
+                            let (src_idx, dst_idx) = if incoming {
+                                (v as usize, u as usize)
+                            } else {
+                                (u as usize, v as usize)
+                            };
+                            let src = load_at(src_idx)?;
+                            let dst = load_at(dst_idx)?;
+                            if let Some(ft) = from_type
+                                && src.node_type != ft
                             {
-                                row.hops = Some(h);
+                                continue;
                             }
-                        })
-                        .or_insert(EdgeRow {
-                            source: Self::project(&src),
-                            edge: edge_type_cli(edge),
-                            direction: if incoming { "in" } else { "out" }.into(),
-                            target: Self::project(&dst),
-                            hops: Some(hop),
-                            occurrences: 1,
-                        });
-                    if seen.insert(nid) && hop < depth {
-                        q.push_back((nid, hop));
+                            if let Some(tt) = to_type
+                                && dst.node_type != tt
+                            {
+                                continue;
+                            }
+                            if !Self::edge_scope_ok(
+                                &src,
+                                &dst,
+                                filters.scope.as_deref(),
+                                filters.scope_mode,
+                            ) {
+                                continue;
+                            }
+                            let key = (src.id, dst.id, incoming);
+                            agg.entry(key)
+                                .and_modify(|row| {
+                                    row.occurrences = row.occurrences.saturating_add(1);
+                                    if let (Some(h), Some(prev)) = (Some(hop), row.hops)
+                                        && h < prev
+                                    {
+                                        row.hops = Some(h);
+                                    }
+                                })
+                                .or_insert(EdgeRow {
+                                    source: Self::project(&src),
+                                    edge: edge_type_cli(edge),
+                                    direction: if incoming { "in" } else { "out" }.into(),
+                                    target: Self::project(&dst),
+                                    hops: Some(hop),
+                                    occurrences: 1,
+                                });
+                            if seen.insert(v) && hop < depth {
+                                q.push_back((v, hop));
+                            }
+                        }
+                    }
+                    Ok(())
+                };
+                match direction {
+                    RelationDirection::Out => walk_csr(false, &mut agg)?,
+                    RelationDirection::In => walk_csr(true, &mut agg)?,
+                    RelationDirection::Both => {
+                        walk_csr(false, &mut agg)?;
+                        walk_csr(true, &mut agg)?;
                     }
                 }
             }
-            Ok(())
-        };
+        } else {
+            let adj = self.build_typed_adjacency(edge)?;
+            let walk =
+                |incoming: bool, agg: &mut HashMap<(Uuid, Uuid, bool), EdgeRow>| -> Result<()> {
+                    let mut seen = HashSet::from([seed.id]);
+                    let mut q = VecDeque::from([(seed.id, 0usize)]);
+                    while let Some((id, d)) = q.pop_front() {
+                        if d >= depth {
+                            continue;
+                        }
+                        let nexts = if incoming {
+                            adj.incoming.get(&id)
+                        } else {
+                            adj.outgoing.get(&id)
+                        };
+                        let Some(nexts) = nexts else { continue };
+                        for &nid in nexts {
+                            let hop = d + 1;
+                            let (src_id, dst_id) = if incoming { (nid, id) } else { (id, nid) };
+                            let Some(src) = self.store.get_node(src_id)? else {
+                                continue;
+                            };
+                            let Some(dst) = self.store.get_node(dst_id)? else {
+                                continue;
+                            };
+                            if let Some(ft) = from_type
+                                && src.node_type != ft
+                            {
+                                continue;
+                            }
+                            if let Some(tt) = to_type
+                                && dst.node_type != tt
+                            {
+                                continue;
+                            }
+                            if !Self::edge_scope_ok(
+                                &src,
+                                &dst,
+                                filters.scope.as_deref(),
+                                filters.scope_mode,
+                            ) {
+                                continue;
+                            }
+                            let key = (src_id, dst_id, incoming);
+                            agg.entry(key)
+                                .and_modify(|row| {
+                                    row.occurrences = row.occurrences.saturating_add(1);
+                                    // Keep the shortest hop when collapsing duplicates.
+                                    if let (Some(h), Some(prev)) = (Some(hop), row.hops)
+                                        && h < prev
+                                    {
+                                        row.hops = Some(h);
+                                    }
+                                })
+                                .or_insert(EdgeRow {
+                                    source: Self::project(&src),
+                                    edge: edge_type_cli(edge),
+                                    direction: if incoming { "in" } else { "out" }.into(),
+                                    target: Self::project(&dst),
+                                    hops: Some(hop),
+                                    occurrences: 1,
+                                });
+                            if seen.insert(nid) && hop < depth {
+                                q.push_back((nid, hop));
+                            }
+                        }
+                    }
+                    Ok(())
+                };
 
-        match direction {
-            RelationDirection::Out => walk(false, &mut agg)?,
-            RelationDirection::In => walk(true, &mut agg)?,
-            RelationDirection::Both => {
-                walk(false, &mut agg)?;
-                walk(true, &mut agg)?;
+            match direction {
+                RelationDirection::Out => walk(false, &mut agg)?,
+                RelationDirection::In => walk(true, &mut agg)?,
+                RelationDirection::Both => {
+                    walk(false, &mut agg)?;
+                    walk(true, &mut agg)?;
+                }
             }
         }
 
@@ -1248,6 +1509,30 @@ impl<'a> StructuredQuery<'a> {
                 })
             }
             InventoryBy::Edge => {
+                if filters.scope.is_none()
+                    && let Some(csr) = self.store.columnar().and_then(|c| c.csr())
+                {
+                    let mut hist = [0usize; 256];
+                    for &code in csr.edge_types() {
+                        hist[code as usize] += 1;
+                    }
+                    let counts = ALL_EDGE_TYPES
+                        .iter()
+                        .map(|t| {
+                            let c = hist[edge_type_to_u8(*t) as usize];
+                            InventoryCount {
+                                key: edge_type_cli(*t),
+                                count: c,
+                                occurrences: Some(c),
+                            }
+                        })
+                        .collect();
+                    return Ok(InventoryResult {
+                        schema_version: STRUCTURED_QUERY_SCHEMA_VERSION,
+                        by: "edge".into(),
+                        counts,
+                    });
+                }
                 // `count` = distinct (from,to) pairs; `occurrences` = raw stored edges.
                 let mut distinct: HashMap<EdgeType, HashSet<(Uuid, Uuid)>> = ALL_EDGE_TYPES
                     .iter()

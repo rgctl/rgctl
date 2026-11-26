@@ -53,9 +53,9 @@ This document specifies the **Multi-Tier Code Clone Detection subsystem** in `rg
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Cryptographic Exact Body Deduplication (Type-1)** | Roy, Cordy & Koschke (2009), *Comparison and Evaluation of Code Clone Detection Techniques and Tools* | [`clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/clones.rs#L1-L240) groups functions sharing identical worker-computed BLAKE3 `code_hash` digests in $O(N)$ time without reading source files. |
+| **Cryptographic Exact Body Deduplication (Type-1)** | Roy, Cordy & Koschke (2009), *Comparison and Evaluation of Code Clone Detection Techniques and Tools* | [`clones.rs`](../../crates/rgctl-analysis/src/clones.rs#L1-L240) groups functions sharing identical worker-computed BLAKE3 `code_hash` digests in $O(N)$ time without reading source files. |
 | **Bitwise Banded Locality-Sensitive Hashing (Type-2)** | Broder (1997); Bloom Filter Jaccard Estimation | In `--mode bloom`, each of the four 64-bit words of `token_bloom: [u64; 4]` serves as an LSH band key (capping bucket size at `512` to skip ubiquitous boilerplate). Candidate pairs are scored via hardware `u64::count_ones` Jaccard similarity $\frac{\sum \text{popcnt}(A_i \land B_i)}{\sum \text{popcnt}(A_i \lor B_i)} \ge \tau$ (default $\tau = 0.85$). |
-| **Single-Entry Single-Exit (SESE) Hammock Decomposition** | Johnson, Pearson & Pingali (1994), *The Program Structure Tree: Computing Control Regions in Linear Time* | [`fragment_clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/fragment_clones.rs#L1-L280) pairs dominator tree (`p` dominates `q`) and post-dominator tree (`q` post-dominates `p`) equivalences to isolate self-contained sub-function control regions with $3 \le |S| \le 15$ statements. |
+| **Single-Entry Single-Exit (SESE) Hammock Decomposition** | Johnson, Pearson & Pingali (1994), *The Program Structure Tree: Computing Control Regions in Linear Time* | [`fragment_clones.rs`](../../crates/rgctl-analysis/src/fragment_clones.rs#L1-L280) pairs dominator tree (`p` dominates `q`) and post-dominator tree (`q` post-dominates `p`) equivalences to isolate self-contained sub-function control regions with $3 \le |S| \le 15$ statements. |
 | **1-Dimensional Weisfeiler–Lehman (1-WL) Graph Isomorphism** | Weisfeiler & Lehman (1968); Shervashidze et al. (2011), *Weisfeiler-Lehman Graph Kernels* | Each SESE subgraph initializes node colors from normalized statement kinds (`If`, `Loop`, `Call`, `Assign`, `Decl`, `Return`) and refines colors over **2 iterations** of sorted neighbor + edge-kind (`Next`, `IfTrue`, `IfFalse`, def-use) multiset hashing into a canonical `structural_hash`. |
 
 ---
@@ -93,7 +93,7 @@ pub struct FragmentCloneReport {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl clones --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L765-L835):
+Verified against `rgctl clones --help` and [`src/cli/mod.rs`](../../src/cli/mod.rs#L765-L835):
 
 ```bash
 # 1. Type-1 exact clones (identical code_hash, min 5 LOC, excluding test paths)
@@ -165,9 +165,9 @@ rgctl clones processRefund --file src/PaymentService.java -f json
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Type-1 Exact & Type-2 Bloom Engine** | [`crates/rgctl-analysis/src/clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/clones.rs) | `CloneDetector`, `CloneReport`, `CloneGroup`, `detect_exact_clones`, `detect_bloom_clones` |
-| **Type-3/4 SESE + 1-WL Fragment Engine** | [`crates/rgctl-analysis/src/fragment_clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/fragment_clones.rs) | `FragmentCloneDetector`, `FragmentCloneReport`, `extract_sese_regions`, `wl_canonical_hash` |
-| **CLI Clones Command** | [`src/cli/clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/clones.rs) | `ClonesArgs`, `run` |
+| **Type-1 Exact & Type-2 Bloom Engine** | [`crates/rgctl-analysis/src/clones.rs`](../../crates/rgctl-analysis/src/clones.rs) | `CloneDetector`, `CloneReport`, `CloneGroup`, `detect_exact_clones`, `detect_bloom_clones` |
+| **Type-3/4 SESE + 1-WL Fragment Engine** | [`crates/rgctl-analysis/src/fragment_clones.rs`](../../crates/rgctl-analysis/src/fragment_clones.rs) | `FragmentCloneDetector`, `FragmentCloneReport`, `extract_sese_regions`, `wl_canonical_hash` |
+| **CLI Clones Command** | [`src/cli/clones.rs`](../../src/cli/clones.rs) | `ClonesArgs`, `run` |
 
 ---
 

@@ -8,9 +8,9 @@
 //! and hashes the spilled bincode blobs for digest identity.
 
 use crate::columnar_snapshot::{
-    EdgeRow, StringPool, append_node_columnar_prehashed, write_columnar_assembled,
+    StringPool, append_node_columnar_prehashed, find_node_row_index, write_columnar_assembled_csr,
 };
-use crate::csr::edge_type_to_u8;
+use crate::csr::{CodeGraphCsr, edge_type_to_u8};
 use crate::schema::{Edge, Node, NodeType};
 use rayon::prelude::*;
 use rgctl_error::{Error, Result};
@@ -313,11 +313,12 @@ pub fn write_columnar_from_spill(spill: FinishedSpill, path: &Path) -> Result<St
         }
     }
 
-    let mut edge_rows = Vec::with_capacity(edge_count);
+    let mut indexed_edges: Vec<(u32, u32, u8)> = Vec::with_capacity(edge_count);
     {
         let mut reader = BufReader::with_capacity(8 * 1024 * 1024, File::open(&edges_sorted)?);
         let mut prev_key: Option<[u8; MAX_SPILL_KEY_LEN]> = None;
         let mut prev_key_len = 0usize;
+        let mut cached_from: Option<([u8; 16], u32)> = None;
         for i in 0..edge_count {
             let rec = read_one_record_at(&mut reader, EDGE_KEY_LEN, "edge", i, edge_count)?;
             if prev_key
@@ -328,24 +329,36 @@ pub fn write_columnar_from_spill(spill: FinishedSpill, path: &Path) -> Result<St
             }
             prev_key = Some(rec.key);
             prev_key_len = rec.key_len;
+            let mut from_bytes = [0u8; 16];
+            from_bytes.copy_from_slice(&rec.key[..16]);
+            let mut to_bytes = [0u8; 16];
+            to_bytes.copy_from_slice(&rec.key[16..32]);
+            let src = match cached_from {
+                Some((prev, idx)) if prev == from_bytes => idx,
+                _ => {
+                    let Some(idx) = find_node_row_index(&node_rows, &from_bytes) else {
+                        continue;
+                    };
+                    cached_from = Some((from_bytes, idx));
+                    idx
+                }
+            };
+            let Some(dst) = find_node_row_index(&node_rows, &to_bytes) else {
+                continue;
+            };
             hasher.update(&rec.blob);
-            let from = Uuid::from_bytes(rec.key[..16].try_into().unwrap());
-            let to = Uuid::from_bytes(rec.key[16..32].try_into().unwrap());
-            let edge_type = rec.key[32];
-            edge_rows.push(EdgeRow {
-                from: *from.as_bytes(),
-                to: *to.as_bytes(),
-                edge_type,
-                _pad: [0; 7],
-            });
+            indexed_edges.push((src, dst, rec.key[32]));
         }
     }
 
     let content_digest = hasher.finalize().to_hex().to_string();
-    write_columnar_assembled(
+    let csr = CodeGraphCsr::from_indexed_edges(node_rows.len(), &indexed_edges);
+    drop(indexed_edges);
+    write_columnar_assembled_csr(
         path,
         &node_rows,
-        &edge_rows,
+        &csr,
+        &[],
         &strings,
         &extensions_blob,
         &name_index,

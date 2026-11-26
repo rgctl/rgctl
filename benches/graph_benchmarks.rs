@@ -58,7 +58,7 @@ fn bench_incoming_filtered(c: &mut Criterion) {
         .pop()
         .unwrap()
         .id;
-    let idx = view.uuid_to_index[&hub];
+    let idx = view.get_index(hub).unwrap();
 
     c.bench_function("incoming_filtered_calls_10k", |b| {
         b.iter(|| black_box(view.incoming_filtered(idx, &[EdgeType::Calls]).count()));

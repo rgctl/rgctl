@@ -136,9 +136,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
         symbol_name: &str,
     ) -> Result<BlastRadiusReport> {
         let source_idx = view
-            .uuid_to_index
-            .get(&symbol_id)
-            .copied()
+            .get_index(symbol_id)
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
 
         let direct_caller_ids = incoming_callers(view, self.backend, source_idx);
@@ -161,7 +159,7 @@ impl<'a> BlastRadiusAnalyzer<'a> {
             if caller_id == symbol_id || !impact_ids.insert(caller_id) {
                 continue;
             }
-            let Some(caller_idx) = view.uuid_to_index.get(&caller_id).copied() else {
+            let Some(caller_idx) = view.get_index(caller_id) else {
                 continue;
             };
             for pred in view.incoming_filtered(caller_idx, CALL_EDGES) {
