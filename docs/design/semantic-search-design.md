@@ -52,10 +52,10 @@ This document specifies the **Sign-Quantized Semantic Search, Structural Token-B
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **1-Bit Sign Random Projections (SimHash / Charikar LSH)** | Charikar (2002), *Similarity Estimation Techniques from Rounding Algorithms* (*STOC*) | [`semantic_search.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_search.rs#L1-L260) quantizes 256-dimensional `f32` embeddings (`1,024 bytes`) into 256-bit packed `[u64; 4]` signatures (`32 bytes` — a $32\times$ memory reduction), approximating cosine similarity via hardware `u64::count_ones(a ^ b)` (`POPCNT`). |
-| **Knowledge Distillation into Static Token Projections** | Hinton, Vinyals & Dean (2015); Static word/subtoken projection distillation | Default `--embedder vocab` ([`semantic_vocab.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_vocab.rs#L1-L180)) uses a compiled 256-d token projection table distilled from the neural `code-daemon` teacher (`rgctl semantic distill`), running at $>100,000$ functions/sec on CPU with zero external model files or ONNX runtime dependencies. |
-| **Graph Signal Diffusion (Jacobi Graph Convolution)** | Kipf & Welling (2017); Personalized PageRank feature propagation | When `--diffuse` is passed, [`semantic_diffuse.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_diffuse.rs#L1-L140) performs $T = 2$ iterations of Jacobi smoothing $\mathbf{h}_u^{(t+1)} = (1 - \alpha)\mathbf{h}_u^{(t)} + \alpha \frac{1}{|N(u)|}\sum_{v \in N(u)} \mathbf{h}_v^{(t)}$ ($\alpha = 0.25$) over the call graph prior to 1-bit sign quantization. |
-| **Reciprocal / Linear Multi-Signal Late Fusion** | Cormack, Clarke & Buettcher (2009); Hybrid Lexical-Dense Retrieval | [`semantic_fusion.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_fusion.rs#L1-L210) re-ranks the top-256 Hamming candidates by combining semantic Hamming similarity, exact subtoken name overlap, 256-bit `token_bloom` sketch Jaccard similarity, PageRank, and Blast Radius. |
+| **1-Bit Sign Random Projections (SimHash / Charikar LSH)** | Charikar (2002), *Similarity Estimation Techniques from Rounding Algorithms* (*STOC*) | [`semantic_search.rs`](../../crates/rgctl-analysis/src/semantic_search.rs#L1-L260) quantizes 256-dimensional `f32` embeddings (`1,024 bytes`) into 256-bit packed `[u64; 4]` signatures (`32 bytes` — a $32\times$ memory reduction), approximating cosine similarity via hardware `u64::count_ones(a ^ b)` (`POPCNT`). |
+| **Knowledge Distillation into Static Token Projections** | Hinton, Vinyals & Dean (2015); Static word/subtoken projection distillation | Default `--embedder vocab` ([`semantic_vocab.rs`](../../crates/rgctl-analysis/src/semantic_vocab.rs#L1-L180)) uses a compiled 256-d token projection table distilled from the neural `code-daemon` teacher (`rgctl semantic distill`), running at $>100,000$ functions/sec on CPU with zero external model files or ONNX runtime dependencies. |
+| **Graph Signal Diffusion (Jacobi Graph Convolution)** | Kipf & Welling (2017); Personalized PageRank feature propagation | When `--diffuse` is passed, [`semantic_diffuse.rs`](../../crates/rgctl-analysis/src/semantic_diffuse.rs#L1-L140) performs $T = 2$ iterations of Jacobi smoothing $\mathbf{h}_u^{(t+1)} = (1 - \alpha)\mathbf{h}_u^{(t)} + \alpha \frac{1}{|N(u)|}\sum_{v \in N(u)} \mathbf{h}_v^{(t)}$ ($\alpha = 0.25$) over the call graph prior to 1-bit sign quantization. |
+| **Reciprocal / Linear Multi-Signal Late Fusion** | Cormack, Clarke & Buettcher (2009); Hybrid Lexical-Dense Retrieval | [`semantic_fusion.rs`](../../crates/rgctl-analysis/src/semantic_fusion.rs#L1-L210) re-ranks the top-256 Hamming candidates by combining semantic Hamming similarity, exact subtoken name overlap, 256-bit `token_bloom` sketch Jaccard similarity, PageRank, and Blast Radius. |
 
 ---
 
@@ -63,7 +63,7 @@ This document specifies the **Sign-Quantized Semantic Search, Structural Token-B
 
 ### 3.1 256-Bit Structural Token-Bloom Sketch (`[u64; 4]`)
 
-Implemented in [`crates/rgctl-graph/src/structural_sketch.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/structural_sketch.rs):
+Implemented in [`crates/rgctl-graph/src/structural_sketch.rs`](../../crates/rgctl-graph/src/structural_sketch.rs):
 - Computed on Rayon extraction workers during `SymbolPass1Prep` from split identifier subtokens (`processOrderItem` → `process`, `order`, `item`).
 - Stored in `NodeExtension.token_bloom: Option<[u64; 4]>` (`32 bytes`).
 - Enables `--keyword-and` filtering and sub-linear clone pre-filtering without re-reading source files.
@@ -83,7 +83,7 @@ Implemented in [`crates/rgctl-graph/src/structural_sketch.rs`](file:///Users/ssh
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl semantic --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L1404-L1520):
+Verified against `rgctl semantic --help` and [`src/cli/mod.rs`](../../src/cli/mod.rs#L1404-L1520):
 
 ```bash
 # 1. Build .rgctl/semantic_index.bin (default: compiled vocab embedder, 256-d, incremental)
@@ -106,7 +106,7 @@ rgctl semantic query "payment gateway" --scope community -f json
 
 ### 4.2 JSON Schema (`rgctl semantic query "<QUERY>" -f json`)
 
-Implemented in [`src/cli/semantic_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/semantic_output.rs):
+Implemented in [`src/cli/semantic_output.rs`](../../src/cli/semantic_output.rs):
 
 ```json
 {
@@ -134,12 +134,12 @@ Implemented in [`src/cli/semantic_output.rs`](file:///Users/sshaaf/git/rust/rgct
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Hamming Index & Search** | [`crates/rgctl-analysis/src/semantic_search.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_search.rs) | `SemanticIndex`, `SemanticRow`, `DEFAULT_EMBEDDING_DIMENSIONS` (`256`), `DEFAULT_CANDIDATE_POOL` (`256`) |
-| **Vocab Projection Embedder** | [`crates/rgctl-analysis/src/semantic_vocab.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_vocab.rs) | `VocabEmbedder`, `distill_vocab_matrix` |
-| **Call-Graph Jacobi Diffusion** | [`crates/rgctl-analysis/src/semantic_diffuse.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_diffuse.rs) | `diffuse_embeddings` |
-| **Late Fusion & Hybrid Expansion** | [`crates/rgctl-analysis/src/semantic_fusion.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_fusion.rs), [`semantic_hybrid.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/semantic_hybrid.rs) | `fuse_candidates`, `expand_call_neighborhood` |
-| **256-Bit Token Bloom Sketch** | [`crates/rgctl-graph/src/structural_sketch.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/structural_sketch.rs) | `compute_token_bloom`, `bloom_jaccard` |
-| **CLI & HTTP Endpoints** | [`src/cli/semantic.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/semantic.rs), [`src/cli/semantic_api.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/semantic_api.rs) | `SemanticCommands`, `GET /api/semantic/status`, `POST /api/semantic/query` |
+| **Hamming Index & Search** | [`crates/rgctl-analysis/src/semantic_search.rs`](../../crates/rgctl-analysis/src/semantic_search.rs) | `SemanticIndex`, `SemanticRow`, `DEFAULT_EMBEDDING_DIMENSIONS` (`256`), `DEFAULT_CANDIDATE_POOL` (`256`) |
+| **Vocab Projection Embedder** | [`crates/rgctl-analysis/src/semantic_vocab.rs`](../../crates/rgctl-analysis/src/semantic_vocab.rs) | `VocabEmbedder`, `distill_vocab_matrix` |
+| **Call-Graph Jacobi Diffusion** | [`crates/rgctl-analysis/src/semantic_diffuse.rs`](../../crates/rgctl-analysis/src/semantic_diffuse.rs) | `diffuse_embeddings` |
+| **Late Fusion & Hybrid Expansion** | [`crates/rgctl-analysis/src/semantic_fusion.rs`](../../crates/rgctl-analysis/src/semantic_fusion.rs), [`semantic_hybrid.rs`](../../crates/rgctl-analysis/src/semantic_hybrid.rs) | `fuse_candidates`, `expand_call_neighborhood` |
+| **256-Bit Token Bloom Sketch** | [`crates/rgctl-graph/src/structural_sketch.rs`](../../crates/rgctl-graph/src/structural_sketch.rs) | `compute_token_bloom`, `bloom_jaccard` |
+| **CLI & HTTP Endpoints** | [`src/cli/semantic.rs`](../../src/cli/semantic.rs), [`src/cli/semantic_api.rs`](../../src/cli/semantic_api.rs) | `SemanticCommands`, `GET /api/semantic/status`, `POST /api/semantic/query` |
 
 ---
 

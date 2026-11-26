@@ -8,7 +8,6 @@ use rgctl_error::{Error, Result};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use uuid::Uuid;
 
 const NODE_INDEX_SHARDS: usize = 16;
 
@@ -295,41 +294,41 @@ fn diff_edges(
     sink: &mut dyn DiffSink,
     stats: &mut DiffStats,
 ) -> Result<()> {
-    let base_uuid_to_stable = uuid_to_stable_map(base_index);
-    let head_uuid_to_stable = uuid_to_stable_map(head_index);
+    let base_idx_to_stable = row_idx_to_stable_vec(base_col.node_count(), base_index);
+    let head_idx_to_stable = row_idx_to_stable_vec(head_col.node_count(), head_index);
 
     let mut base_edges = Vec::with_capacity(base_col.edge_count());
-    for idx in 0..base_col.edge_count() {
-        let (from, to, edge_type) = base_col.edge_at(idx)?;
-        let Some(from_key) = base_uuid_to_stable.get(&from) else {
-            continue;
+    base_col.for_each_edge_indexed(|src, dst, edge_type| {
+        let Some(from_key) = base_idx_to_stable.get(src as usize).and_then(|k| *k) else {
+            return Ok(());
         };
-        let Some(to_key) = base_uuid_to_stable.get(&to) else {
-            continue;
+        let Some(to_key) = base_idx_to_stable.get(dst as usize).and_then(|k| *k) else {
+            return Ok(());
         };
         base_edges.push(EdgeStableKey {
-            from: *from_key,
-            to: *to_key,
+            from: from_key,
+            to: to_key,
             edge_type,
         });
-    }
+        Ok(())
+    })?;
     base_edges.sort_unstable();
 
     let mut head_edges = Vec::with_capacity(head_col.edge_count());
-    for idx in 0..head_col.edge_count() {
-        let (from, to, edge_type) = head_col.edge_at(idx)?;
-        let Some(from_key) = head_uuid_to_stable.get(&from) else {
-            continue;
+    head_col.for_each_edge_indexed(|src, dst, edge_type| {
+        let Some(from_key) = head_idx_to_stable.get(src as usize).and_then(|k| *k) else {
+            return Ok(());
         };
-        let Some(to_key) = head_uuid_to_stable.get(&to) else {
-            continue;
+        let Some(to_key) = head_idx_to_stable.get(dst as usize).and_then(|k| *k) else {
+            return Ok(());
         };
         head_edges.push(EdgeStableKey {
-            from: *from_key,
-            to: *to_key,
+            from: from_key,
+            to: to_key,
             edge_type,
         });
-    }
+        Ok(())
+    })?;
     head_edges.sort_unstable();
 
     let mut base_i = 0usize;
@@ -363,8 +362,17 @@ fn diff_edges(
     Ok(())
 }
 
-fn uuid_to_stable_map(index: &HashMap<StableNodeKey, NodeRowRef>) -> HashMap<Uuid, StableNodeKey> {
-    index.iter().map(|(key, row)| (row.id, *key)).collect()
+fn row_idx_to_stable_vec(
+    node_count: usize,
+    index: &HashMap<StableNodeKey, NodeRowRef>,
+) -> Vec<Option<StableNodeKey>> {
+    let mut out = vec![None; node_count];
+    for (key, row) in index {
+        if row.idx < out.len() {
+            out[row.idx] = Some(*key);
+        }
+    }
+    out
 }
 
 fn emit_edge_removed(

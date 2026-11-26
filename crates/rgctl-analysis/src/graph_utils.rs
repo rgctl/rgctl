@@ -9,7 +9,7 @@ use rgctl_error::Result;
 use rgctl_graph::backend::MemoryBackend;
 use rgctl_graph::schema::EdgeType;
 use rgctl_graph::snapshot::{PreparedGraphSnapshot, SnapshotNodeStore};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 
 /// Default max traversal depth for impact/blast-radius BFS analyses.
@@ -52,31 +52,15 @@ pub fn edge_type_set(allowed_types: &[EdgeType]) -> HashSet<EdgeType> {
 /// Typed graph topology view (CSR-backed) with UUID mapping.
 ///
 /// Memory layout (RSS-conscious):
-/// - one bidirectional typed CSR ([`StructuralTopology`])
-/// - `uuid_to_index` for lookups (`NodeIndex` mirrors dense `u32`)
-/// - dense `index_to_uuid`
+/// - wraps [`StructuralTopology`] directly with zero duplicate index maps or `Vec<Uuid>` clones.
 pub struct PetGraphView {
     /// Underlying CSR topology.
     pub topo: StructuralTopology,
-    /// Map from node UUID to dense index (as [`NodeIndex`] for API compatibility).
-    pub uuid_to_index: HashMap<Uuid, NodeIndex>,
-    /// Dense map: `NodeIndex.index()` → UUID
-    pub index_to_uuid: Vec<Uuid>,
 }
 
 impl PetGraphView {
     fn from_topo(topo: StructuralTopology) -> Self {
-        let index_to_uuid = topo.index_to_uuid.clone();
-        let uuid_to_index = topo
-            .uuid_to_index
-            .iter()
-            .map(|(&u, &i)| (u, NodeIndex::new(i as usize)))
-            .collect();
-        Self {
-            topo,
-            uuid_to_index,
-            index_to_uuid,
-        }
+        Self { topo }
     }
 
     /// Build from a memory backend.
@@ -151,18 +135,29 @@ impl PetGraphView {
     }
 
     /// Get petgraph NodeIndex for a UUID.
+    #[inline]
     pub fn get_index(&self, uuid: Uuid) -> Option<NodeIndex> {
-        self.uuid_to_index.get(&uuid).copied()
+        self.topo
+            .get_index(uuid)
+            .map(|i| NodeIndex::new(i as usize))
     }
 
     /// Get UUID for a petgraph NodeIndex.
+    #[inline]
     pub fn get_uuid(&self, index: NodeIndex) -> Option<Uuid> {
-        self.index_to_uuid.get(index.index()).copied()
+        self.topo.index_to_uuid.get(index.index()).copied()
+    }
+
+    /// Dense `index -> Uuid` slice without cloning.
+    #[inline]
+    pub fn index_to_uuid_slice(&self) -> &[Uuid] {
+        &self.topo.index_to_uuid
     }
 
     /// Iterate `(NodeIndex, Uuid)` in dense index order.
     pub fn index_uuid_iter(&self) -> impl Iterator<Item = (NodeIndex, Uuid)> + '_ {
-        self.index_to_uuid
+        self.topo
+            .index_to_uuid
             .iter()
             .enumerate()
             .map(|(i, uuid)| (NodeIndex::new(i), *uuid))
@@ -251,10 +246,10 @@ mod tests {
         let view = PetGraphView::from_backend(&backend).unwrap();
         assert_eq!(view.node_count(), 2);
         assert_eq!(view.edge_count(), 1);
-        let idx1 = view.uuid_to_index[&id1];
-        let idx2 = view.uuid_to_index[&id2];
+        let idx1 = view.get_index(id1).unwrap();
+        let idx2 = view.get_index(id2).unwrap();
         assert!(view.has_edge_type(idx1, idx2, EdgeType::Calls));
-        assert_eq!(view.index_to_uuid.len(), 2);
+        assert_eq!(view.index_to_uuid_slice().len(), 2);
     }
 
     #[test]

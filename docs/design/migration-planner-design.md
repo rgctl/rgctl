@@ -53,9 +53,9 @@ This document specifies the **Software Migration Planner, Package Macro-Graph Sc
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Multi-Objective Centrality & Risk Ranking** | Panyala et al. (2017); Gargiulo et al. (2015), *Componentwise PageRank*; Boldi & Vigna (2013), *HyperBall* | [`compute_migration_plan`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/migration.rs#L220-L420) min-max normalizes average PageRank ($\alpha$), average Harmonic centrality ($\beta$), and maximum Blast Radius ($\gamma$) across package macro-nodes to balance architectural foundation value against blast risk. |
+| **Multi-Objective Centrality & Risk Ranking** | Panyala et al. (2017); Gargiulo et al. (2015), *Componentwise PageRank*; Boldi & Vigna (2013), *HyperBall* | [`compute_migration_plan`](../../crates/rgctl-analysis/src/migration.rs#L220-L420) min-max normalizes average PageRank ($\alpha$), average Harmonic centrality ($\beta$), and maximum Blast Radius ($\gamma$) across package macro-nodes to balance architectural foundation value against blast risk. |
 | **Strangler-Fig Topological Wave Scheduling** | Fowler (2004), *StranglerFigApplication*; Kahn's topological sort with cycle breaking | In `scheduled` mode, `compute_migration_plan` schedules leaf dependency targets (zero or satisfied outgoing package dependencies) in earlier waves so foundational shared modules are migrated before upstream callers. |
-| **Prefix-Aggregated External Dependency Census** | Software supply-chain & namespace migration analysis (e.g., `javax.*` → `jakarta.*`) | [`StructuredQuery::inventory_import_prefix`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/structured_query.rs#L1-L260) aggregates both `NodeType::Import` nodes and unresolved `.rgctl/parked_relations.bin` (`RBPK`) targets by 2-segment namespace prefix (with `--prefix` filtering) so agents can quantify framework footprints in one command. |
+| **Prefix-Aggregated External Dependency Census** | Software supply-chain & namespace migration analysis (e.g., `javax.*` → `jakarta.*`) | [`StructuredQuery::inventory_import_prefix`](../../crates/rgctl-graph/src/structured_query.rs#L1-L260) aggregates both `NodeType::Import` nodes and unresolved `.rgctl/parked_relations.bin` (`RBPK`) targets by 2-segment namespace prefix (with `--prefix` filtering) so agents can quantify framework footprints in one command. |
 
 ---
 
@@ -63,7 +63,7 @@ This document specifies the **Software Migration Planner, Package Macro-Graph Sc
 
 ### 3.1 Package Macro-Graph (`migration_graph.json` v3) & Plan (`migration_plan.json` v2)
 
-Defined in [`crates/rgctl-analysis/src/migration.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/migration.rs):
+Defined in [`crates/rgctl-analysis/src/migration.rs`](../../crates/rgctl-analysis/src/migration.rs):
 
 ```rust
 pub struct MigrationMacroNode {
@@ -160,9 +160,9 @@ rgctl blast-radius OrderService -f json
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Migration Macro-Graph & Scheduler** | [`crates/rgctl-analysis/src/migration.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/migration.rs) | `MigrationGraph`, `MigrationMacroNode`, `MigrationWeights`, `build_migration_graph`, `compute_migration_plan`, `package_label` |
-| **Structured Query Census Engine** | [`crates/rgctl-graph/src/structured_query.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-graph/src/structured_query.rs), [`src/cli/structured_query.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/structured_query.rs) | `StructuredQuery`, `inventory_import_prefix`, `find_by_annotation`, `collect_member_functions_of_type` |
-| **Dashboard Export & TypeScript Mirror** | [`crates/rgctl-dashboard/src/migration_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/migration_export.rs), [`dashboard/src/MigrationView.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/MigrationView.tsx) | `export_migration_artifacts`, `MigrationView` |
+| **Migration Macro-Graph & Scheduler** | [`crates/rgctl-analysis/src/migration.rs`](../../crates/rgctl-analysis/src/migration.rs) | `MigrationGraph`, `MigrationMacroNode`, `MigrationWeights`, `build_migration_graph`, `compute_migration_plan`, `package_label` |
+| **Structured Query Census Engine** | [`crates/rgctl-graph/src/structured_query.rs`](../../crates/rgctl-graph/src/structured_query.rs), [`src/cli/structured_query.rs`](../../src/cli/structured_query.rs) | `StructuredQuery`, `inventory_import_prefix`, `find_by_annotation`, `collect_member_functions_of_type` |
+| **Dashboard Export & TypeScript Mirror** | [`crates/rgctl-dashboard/src/migration_export.rs`](../../crates/rgctl-dashboard/src/migration_export.rs), [`dashboard/src/MigrationView.tsx`](../../dashboard/src/MigrationView.tsx) | `export_migration_artifacts`, `MigrationView` |
 
 ---
 

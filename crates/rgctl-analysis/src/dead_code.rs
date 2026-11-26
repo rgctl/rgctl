@@ -611,7 +611,7 @@ impl<'a> DeadCodeAnalyzer<'a> {
 
     /// Dense CSR index for a node UUID (legacy v1 snapshots only).
     fn legacy_index(&self, id: Uuid) -> Option<usize> {
-        self.topo.uuid_to_index.get(&id).map(|&i| i as usize)
+        self.topo.get_index(id).map(|i| i as usize)
     }
 
     /// UUID for a dense CSR index (legacy v1 snapshots only).

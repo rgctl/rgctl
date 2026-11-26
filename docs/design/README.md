@@ -16,7 +16,8 @@ Every engineering design document in this directory follows the **6-section `rgc
 
 | Architecture Document | Scope |
 | :--- | :--- |
-| [**Graph Storage & Extraction Architecture**](../graph-storage-architecture.md) | `RGCL` v2 (`136B` header, `64B NodeRow`, `40B EdgeRow`), `SegmentedSpill` external sort, `ColdMetadataDb` (`NodeExtension` + 14B Green span tail), `RBPK` parked relations, `RGCS` v2 / `RGCT` v1 lossless sidecars, and `DeltaSegment` compaction. |
+| [**Graph Storage & Extraction Architecture**](../graph-storage-architecture.md) | `RBGR` v5 columnar snapshot (`136B` header, `64B NodeRow`, zero-copy bidirectional CSR + `SparseEdgePad`), `SegmentedSpill` external sort, `NodeExtension` + 14B Green span tail, `RBPK` parked relations, `RGCS` v2 / `RGCT` v1 lossless sidecars, and `DeltaSegment` compaction. |
+| [**CSR Topology & Zero-Copy Graph Architecture**](csr-topology-architecture.md) | Columnar v5 CSR binary layout, `CodeGraphCsr` (`Mmap` / `Owned`), `(edge_type, neighbor)` sub-slice binary search, deduplicated `StructuralTopology` / `PetGraphView`, `CsrOutAdj`, `WeightedCsr` Fast-Leiden, pull-based `FastPageRank`, and Beamer direction-optimizing BFS. |
 | [**Graph Analysis, CPG & Reachability Architecture**](../analysis-architecture.md) | 3-tier memory model, `StructuralTopology` / `CodeGraphCsr` / `FlatGraphIndex`, verified centrality & HyperBall constants, Fast-Leiden communities, SCC blast radius, and the v3 `cfg_pdg.archive.bin` archive. |
 | [**Workspace Code Structure**](../Code_structure.md) | Crate dependency graph, layer responsibilities, CLI command dispatch map, and `.rgctl/` artifact inventory. |
 

@@ -237,9 +237,7 @@ impl<'a> QueryExecutor<'a> {
                     ));
                 }
                 let start_idx = view
-                    .uuid_to_index
-                    .get(&start_node.id)
-                    .copied()
+                    .get_index(start_node.id)
                     .ok_or_else(|| Error::NodeNotFound(start_node.name.to_string()))?;
 
                 for end_idx in traverse_edge(view, start_idx, edge) {

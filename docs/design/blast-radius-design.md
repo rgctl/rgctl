@@ -1,6 +1,6 @@
 # Blast Radius & Reachability — Engineering Design
 
-This document specifies the **Blast Radius, Kosaraju SCC Condensation, and Multi-Tier Reachability subsystem** in `rgctl` (`crates/rgctl-analysis/src/blast_radius_scc.rs`, `blast_engine_snapshot.rs`, `macro_call_index.rs`, `macro_call_lookup.rs`, and `src/cli/blast_radius.rs`). It details how `rgctl` computes upstream change impact across cyclic call graphs, supports both callable (`Function`, `Method`) and container (`Class`, `Interface`, `Struct`, `Enum`, `Module`) seeds, and serves sub-second queries via the 3-tier lookup architecture.
+This document specifies the **Blast Radius, Kosaraju SCC Condensation, and Multi-Tier Reachability subsystem** in `rgctl` (`crates/rgctl-analysis/src/blast_radius_scc.rs`, `blast_engine_snapshot.rs`, `macro_call_index.rs`, `macro_call_lookup.rs`, and `src/cli/blast_radius.rs`). It details how `rgctl` computes upstream change impact across cyclic call graphs, supports both callable (`Function`, `Method`) and container (`Class`, `Interface`, `Struct`, `Enum`, `Module`) seeds, and serves sub-second queries via the 3-tier lookup architecture. For the underlying zero-copy bidirectional CSR layout used by Kosaraju SCC and PR-scoped upstream closures, see [**CSR Topology & Zero-Copy Graph Architecture**](csr-topology-architecture.md).
 
 ![Blast Radius tab — impact metrics and caller table (gbuilder)](../images/design/blast-radius/blast-radius-impact.png)
 
@@ -54,10 +54,10 @@ This document specifies the **Blast Radius, Kosaraju SCC Condensation, and Multi
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Kosaraju-Sharir Strongly Connected Components (SCC)** | Kosaraju (1978); Sharir (1981), *A Strong-Connectivity Algorithm and Its Applications in Data Flow Analysis* | [`BlastRadiusEngine`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_radius_scc.rs#L1-L260) decomposes the call graph into Strongly Connected Components ($C_1, \dots, C_k$), collapsing mutual recursion into a cycle-free Condensed DAG where topological reachability is well-defined and terminating. |
+| **Kosaraju-Sharir Strongly Connected Components (SCC)** | Kosaraju (1978); Sharir (1981), *A Strong-Connectivity Algorithm and Its Applications in Data Flow Analysis* | [`BlastRadiusEngine`](../../crates/rgctl-analysis/src/blast_radius_scc.rs#L1-L260) decomposes the call graph into Strongly Connected Components ($C_1, \dots, C_k$), collapsing mutual recursion into a cycle-free Condensed DAG where topological reachability is well-defined and terminating. |
 | **Bitset-Accelerated Transitive Closure on Condensed DAGs** | Nuutila & Soisalon-Soininen (1994), *On Finding the Strongly Connected Components in a Directed Graph* | Bottom-up dynamic programming over the reverse topological order of the Condensed DAG merges 64-bit word bitsets (`reach[u] |= reach[v]`) to compute exact transitive upstream caller counts in $O(V \cdot E_{\text{dag}} / 64)$ operations. |
 | **Log-Normalized Architectural Impact Scoring** | Software change impact & coupling metrics (Briand, Daly & Wüst, 1999) | `impact_score_from_counts(direct_callers, transitive_callers)` combines direct fan-in and transitive upstream reach into a bounded $[0, 100]$ score so leaf utilities and core architectural bottlenecks are immediately distinguishable. |
-| **Container-Level Member Aggregation** | Object-oriented coupling (Chidamber & Kemerer CBO/RFC metrics, 1994) | When `rgctl blast-radius` targets a container type (`Class`, `Interface`, `Struct`, `Enum`, `Trait`, `Module`), [`resolve_type_container_blast`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/blast_radius.rs#L400-L560) unions the upstream caller cones of all member callables while excluding internal self-calls within the container. |
+| **Container-Level Member Aggregation** | Object-oriented coupling (Chidamber & Kemerer CBO/RFC metrics, 1994) | When `rgctl blast-radius` targets a container type (`Class`, `Interface`, `Struct`, `Enum`, `Trait`, `Module`), [`resolve_type_container_blast`](../../src/cli/blast_radius.rs#L400-L560) unions the upstream caller cones of all member callables while excluding internal self-calls within the container. |
 
 ---
 
@@ -67,12 +67,12 @@ This document specifies the **Blast Radius, Kosaraju SCC Condensation, and Multi
 
 | Artifact Path | Purpose | Key Rust Types |
 | :--- | :--- | :--- |
-| `.rgctl/blast_engine.snapshot.bin` | Serialized SCC condensation map (`node_to_scc`), SCC member lists, condensed DAG adjacency, and precomputed per-node `BlastRadiusResult` scores, bound to parent `graph.snapshot.bin` `content_digest`. | `BlastRadiusEngine`, `BlastRadiusResult` ([`blast_engine_snapshot.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_engine_snapshot.rs)) |
-| `.rgctl/macro_call_index.db` / `.bin` | Tier-0 indexed lookup table mapping function names, FQNs, and UUIDs to `MacroIndexEntry` (`direct_caller_ids`, `impact_zone_ids`, `score`) for sub-10ms CLI queries. | `MacroCallLookupDb`, `MacroCallIndex`, `MacroIndexEntry` ([`macro_call_lookup.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/macro_call_lookup.rs)) |
+| `.rgctl/blast_engine.snapshot.bin` | Serialized SCC condensation map (`node_to_scc`), SCC member lists, condensed DAG adjacency, and precomputed per-node `BlastRadiusResult` scores, bound to parent `graph.snapshot.bin` `content_digest`. | `BlastRadiusEngine`, `BlastRadiusResult` ([`blast_engine_snapshot.rs`](../../crates/rgctl-analysis/src/blast_engine_snapshot.rs)) |
+| `.rgctl/macro_call_index.db` / `.bin` | Tier-0 indexed lookup table mapping function names, FQNs, and UUIDs to `MacroIndexEntry` (`direct_caller_ids`, `impact_zone_ids`, `score`) for sub-10ms CLI queries. | `MacroCallLookupDb`, `MacroCallIndex`, `MacroIndexEntry` ([`macro_call_lookup.rs`](../../crates/rgctl-analysis/src/macro_call_lookup.rs)) |
 
 ### 3.2 Depth Filtering & Boundary Classification
 
-- **Hop-Bounded Impact (`--depth N`):** [`filter_impact_by_caller_depth`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/graph_utils.rs#L1-L140) runs a reverse `Calls` BFS from the target symbol over `PetGraphView` up to `N` hops, intersecting the hop-bounded set with the engine's impact zone and recomputing `score = impact_score_from_counts(direct, filtered_impact)`.
+- **Hop-Bounded Impact (`--depth N`):** [`filter_impact_by_caller_depth`](../../crates/rgctl-analysis/src/graph_utils.rs#L1-L140) runs a reverse `Calls` BFS from the target symbol over `PetGraphView` up to `N` hops, intersecting the hop-bounded set with the engine's impact zone and recomputing `score = impact_score_from_counts(direct, filtered_impact)`.
 - **Boundary Classification (`--classify-boundary` / `--boundary KIND`):** Labels upstream callers that cross external system boundaries (`REST_ENDPOINT`, `GRAPHQL`, `GRPC`, `CLI`, `MESSAGE_CONSUMER`, `SCHEDULED_JOB`).
 
 ---
@@ -81,7 +81,7 @@ This document specifies the **Blast Radius, Kosaraju SCC Condensation, and Multi
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl blast-radius --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L655-L699):
+Verified against `rgctl blast-radius --help` and [`src/cli/mod.rs`](../../src/cli/mod.rs#L655-L699):
 
 ```bash
 # Full transitive blast radius for a function, method, or container class/struct
@@ -106,7 +106,7 @@ rgctl blast-radius OrderService::save --with-slices -f json
 
 ### 4.2 JSON Schema (`rgctl blast-radius <SYMBOL> -f json`)
 
-Implemented in [`src/cli/blast_radius_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/blast_radius_output.rs):
+Implemented in [`src/cli/blast_radius_output.rs`](../../src/cli/blast_radius_output.rs):
 
 ```json
 {
@@ -147,11 +147,11 @@ Implemented in [`src/cli/blast_radius_output.rs`](file:///Users/sshaaf/git/rust/
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Kosaraju SCC & Reachability Engine** | [`crates/rgctl-analysis/src/blast_radius_scc.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_radius_scc.rs) | `BlastRadiusEngine`, `BlastRadiusResult`, `impact_score_from_counts` |
-| **Engine Snapshot Persistence** | [`crates/rgctl-analysis/src/blast_engine_snapshot.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_engine_snapshot.rs) | `save_engine`, `try_load_engine` |
-| **Tier-0 Macro Call Lookup Cache** | [`crates/rgctl-analysis/src/macro_call_lookup.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/macro_call_lookup.rs), [`macro_call_index.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/macro_call_index.rs) | `MacroCallLookupDb`, `MacroCallIndex`, `MacroIndexEntry` |
-| **Blast-to-Slice PDG Handoff** | [`crates/rgctl-analysis/src/blast_slice_handoff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_slice_handoff.rs) | `resolve_handoff_seeds`, `trace_blast_to_slices_with_blast` |
-| **CLI Orchestration & JSON Output** | [`src/cli/blast_radius.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/blast_radius.rs), [`src/cli/blast_radius_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/blast_radius_output.rs) | `BlastRadiusArgs`, `try_fast_cached_lookup`, `BlastRadiusResponse` |
+| **Kosaraju SCC & Reachability Engine** | [`crates/rgctl-analysis/src/blast_radius_scc.rs`](../../crates/rgctl-analysis/src/blast_radius_scc.rs) | `BlastRadiusEngine`, `BlastRadiusResult`, `impact_score_from_counts` |
+| **Engine Snapshot Persistence** | [`crates/rgctl-analysis/src/blast_engine_snapshot.rs`](../../crates/rgctl-analysis/src/blast_engine_snapshot.rs) | `save_engine`, `try_load_engine` |
+| **Tier-0 Macro Call Lookup Cache** | [`crates/rgctl-analysis/src/macro_call_lookup.rs`](../../crates/rgctl-analysis/src/macro_call_lookup.rs), [`macro_call_index.rs`](../../crates/rgctl-analysis/src/macro_call_index.rs) | `MacroCallLookupDb`, `MacroCallIndex`, `MacroIndexEntry` |
+| **Blast-to-Slice PDG Handoff** | [`crates/rgctl-analysis/src/blast_slice_handoff.rs`](../../crates/rgctl-analysis/src/blast_slice_handoff.rs) | `resolve_handoff_seeds`, `trace_blast_to_slices_with_blast` |
+| **CLI Orchestration & JSON Output** | [`src/cli/blast_radius.rs`](../../src/cli/blast_radius.rs), [`src/cli/blast_radius_output.rs`](../../src/cli/blast_radius_output.rs) | `BlastRadiusArgs`, `try_fast_cached_lookup`, `BlastRadiusResponse` |
 
 ---
 

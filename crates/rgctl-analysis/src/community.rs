@@ -151,15 +151,15 @@ impl CommunityDetector {
         self
     }
 
-    /// Detect communities using doc-aware edge projection ([`build_community_neighbor_lists`]).
+    /// Detect communities using doc-aware CSR projection (zero `Vec<Vec<_>>` allocation).
     pub fn detect_with_view_defaults(
         &self,
         view: &PetGraphView,
         store: &SnapshotNodeStore,
     ) -> Result<CommunityResult> {
-        let neighbors = build_community_neighbor_lists(view, store)?;
+        let (offsets, targets) = build_community_undirected_csr(view, store)?;
         let allowed = default_community_edge_types();
-        self.detect_with_neighbor_lists(view, neighbors, allowed, None)
+        self.detect_with_undirected_csr(view, &offsets, &targets, allowed, None)
     }
 
     /// Detect communities using [`default_community_edge_types`].
@@ -185,12 +185,8 @@ impl CommunityDetector {
         allowed_types: &[EdgeType],
         importance: Option<&HashMap<Uuid, f64>>,
     ) -> Result<CommunityResult> {
-        self.detect_with_neighbor_lists(
-            view,
-            build_filtered_neighbor_lists(view, allowed_types),
-            allowed_types,
-            importance,
-        )
+        let (offsets, targets) = view.topo.undirected_csr_filtered(allowed_types, &[]);
+        self.detect_with_undirected_csr(view, &offsets, &targets, allowed_types, importance)
     }
 
     /// Detect communities with pre-built undirected neighbor lists.
@@ -204,12 +200,36 @@ impl CommunityDetector {
         allowed_types: &[EdgeType],
         importance: Option<&HashMap<Uuid, f64>>,
     ) -> Result<CommunityResult> {
+        let mut offsets = Vec::with_capacity(neighbors.len() + 1);
+        offsets.push(0u32);
+        let total: usize = neighbors.iter().map(Vec::len).sum();
+        let mut targets = Vec::with_capacity(total);
+        for adj in &neighbors {
+            for &v in adj {
+                targets.push(v as u32);
+            }
+            offsets.push(targets.len() as u32);
+        }
+        drop(neighbors);
+        self.detect_with_undirected_csr(view, &offsets, &targets, allowed_types, importance)
+    }
+
+    fn detect_with_undirected_csr(
+        &self,
+        view: &PetGraphView,
+        offsets: &[u32],
+        targets: &[u32],
+        allowed_types: &[EdgeType],
+        importance: Option<&HashMap<Uuid, f64>>,
+    ) -> Result<CommunityResult> {
         let node_count = view.node_count();
         if node_count == 0 {
             return Ok(empty_community_result());
         }
 
-        let degrees: Vec<usize> = neighbors.iter().map(|n| n.len()).collect();
+        let degrees: Vec<usize> = (0..node_count)
+            .map(|u| (offsets[u + 1] - offsets[u]) as usize)
+            .collect();
         let is_hub = select_hubs(
             &degrees,
             self.hub_policy,
@@ -226,8 +246,9 @@ impl CommunityDetector {
             Some(&degrees),
         );
 
-        let mut labels = fast_leiden(
-            &neighbors,
+        let mut labels = fast_leiden_csr(
+            offsets,
+            targets,
             &is_hub,
             &importance_flat,
             self.tie_break,
@@ -329,22 +350,28 @@ impl CommunityDetector {
         let mut internal_by_community = vec![0.0f64; comm_count];
         let mut degree_sum_by_community = vec![0.0f64; comm_count];
 
-        let _ = view.for_each_edge(|src, dst, ty| {
-            if !allowed_types.contains(&ty) {
-                return;
-            }
-            m += 1.0;
-            let s = src.index();
-            let t = dst.index();
-            degrees[s] += 1.0;
-            degrees[t] += 1.0;
-            if node_community[s] == node_community[t] {
-                let c = node_community[s];
-                if c < internal_by_community.len() {
-                    internal_by_community[c] += 1.0;
+        let mut mask = [false; 256];
+        for &ty in allowed_types {
+            mask[rgctl_graph::csr::edge_type_to_u8(ty) as usize] = true;
+        }
+        for s in 0..node_count {
+            let (targets, types) = view.topo.csr.out_neighbors(s as u32);
+            for (i, &dst) in targets.iter().enumerate() {
+                if !mask[types[i] as usize] {
+                    continue;
+                }
+                let t = dst as usize;
+                m += 1.0;
+                degrees[s] += 1.0;
+                degrees[t] += 1.0;
+                if node_community[s] == node_community[t] {
+                    let c = node_community[s];
+                    if c < internal_by_community.len() {
+                        internal_by_community[c] += 1.0;
+                    }
                 }
             }
-        });
+        }
 
         if m == 0.0 {
             return 0.0;
@@ -553,43 +580,21 @@ impl WeightedCsr {
             .copied()
             .zip(self.weights[start..end].iter().copied())
     }
-
-    fn from_unweighted(neighbors: &[Vec<usize>]) -> Self {
-        let n = neighbors.len();
-        let mut offsets = Vec::with_capacity(n + 1);
-        let mut targets = Vec::new();
-        let mut weights = Vec::new();
-        let mut node_weight = vec![0.0f64; n];
-        offsets.push(0);
-        for (u, adj) in neighbors.iter().enumerate() {
-            for &v in adj {
-                targets.push(v as u32);
-                weights.push(1.0);
-                node_weight[u] += 1.0;
-            }
-            offsets.push(targets.len() as u32);
-        }
-        Self {
-            offsets,
-            targets,
-            weights,
-            node_weight,
-        }
-    }
 }
 
-/// CSR queue-based Fast-Leiden over an undirected neighbor projection.
+/// CSR queue-based Fast-Leiden over a flat undirected CSR `(offsets, targets)`.
 ///
 /// Hubs are frozen (singleton communities, never moved). Tie-breaks use
 /// [`TieBreakStrategy`] when modularity gains are equal within `f64::EPSILON`.
-fn fast_leiden(
-    neighbors: &[Vec<usize>],
+fn fast_leiden_csr(
+    offsets: &[u32],
+    targets: &[u32],
     is_hub: &[bool],
     importance: &[f64],
     tie_break: TieBreakStrategy,
     max_iterations: usize,
 ) -> Vec<usize> {
-    let n = neighbors.len();
+    let n = offsets.len().saturating_sub(1);
     if n == 0 {
         return Vec::new();
     }
@@ -598,7 +603,7 @@ fn fast_leiden(
     let mut active: Vec<usize> = Vec::with_capacity(n);
     let mut old_to_active = vec![usize::MAX; n];
     for u in 0..n {
-        if !neighbors[u].is_empty() {
+        if offsets[u] < offsets[u + 1] {
             old_to_active[u] = active.len();
             active.push(u);
         }
@@ -609,23 +614,37 @@ fn fast_leiden(
         return labels;
     }
 
-    let compact_neighbors: Vec<Vec<usize>> = active
-        .iter()
-        .map(|&u| {
-            neighbors[u]
-                .iter()
-                .filter_map(|&v| {
-                    let a = old_to_active[v];
-                    (a != usize::MAX).then_some(a)
-                })
-                .collect()
-        })
-        .collect();
+    // Build level-0 WeightedCsr directly over active nodes (zero `Vec<Vec<usize>>`).
+    let active_len = active.len();
+    let mut c_offsets = Vec::with_capacity(active_len + 1);
+    c_offsets.push(0u32);
+    let mut c_targets = Vec::with_capacity(targets.len());
+    let mut c_node_weight = vec![0.0f64; active_len];
+    for (ai, &u) in active.iter().enumerate() {
+        let s = offsets[u] as usize;
+        let e = offsets[u + 1] as usize;
+        for &v in &targets[s..e] {
+            let av = old_to_active[v as usize];
+            if av != usize::MAX {
+                c_targets.push(av as u32);
+                c_node_weight[ai] += 1.0;
+            }
+        }
+        c_offsets.push(c_targets.len() as u32);
+    }
+    let c_weights = vec![1.0f64; c_targets.len()];
+    let level0_csr = WeightedCsr {
+        offsets: c_offsets,
+        targets: c_targets,
+        weights: c_weights,
+        node_weight: c_node_weight,
+    };
+
     let compact_hubs: Vec<bool> = active.iter().map(|&u| is_hub[u]).collect();
     let compact_imp: Vec<f64> = active.iter().map(|&u| importance[u]).collect();
 
-    let compact_labels = fast_leiden_active(
-        &compact_neighbors,
+    let compact_labels = fast_leiden_active_csr(
+        level0_csr,
         &compact_hubs,
         &compact_imp,
         tie_break,
@@ -652,16 +671,15 @@ fn fast_leiden(
     labels
 }
 
-fn fast_leiden_active(
-    neighbors: &[Vec<usize>],
+fn fast_leiden_active_csr(
+    mut csr: WeightedCsr,
     is_hub: &[bool],
     importance: &[f64],
     tie_break: TieBreakStrategy,
     max_iterations: usize,
 ) -> Vec<usize> {
-    let n = neighbors.len();
-    let mut csr = WeightedCsr::from_unweighted(neighbors);
-    let mut membership: Vec<usize> = (0..csr.len()).collect();
+    let n = csr.len();
+    let mut membership: Vec<usize> = (0..n).collect();
     let mut working_hubs = is_hub.to_vec();
     let mut working_importance = importance.to_vec();
     let mut orig_comm: Vec<usize> = (0..n).collect();
@@ -1095,7 +1113,7 @@ pub fn verify_community_connectedness(
         let idxs: HashSet<usize> = community
             .members
             .iter()
-            .filter_map(|id| view.uuid_to_index.get(id).map(|n| n.index()))
+            .filter_map(|id| view.get_index(*id).map(|n| n.index()))
             .collect();
         if idxs.is_empty() {
             continue;
@@ -1122,73 +1140,62 @@ pub fn verify_community_connectedness(
     Ok(())
 }
 
+/// Build a flat deduplicated undirected CSR `(offsets, targets)` for community detection:
+/// behavioral edges plus markdown-heading `Contains` edges, with zero `Vec<Vec<usize>>` allocation.
+pub fn build_community_undirected_csr(
+    view: &PetGraphView,
+    store: &SnapshotNodeStore,
+) -> Result<(Vec<u32>, Vec<u32>)> {
+    let base = default_community_edge_types();
+    let n = view.node_count();
+    if n == 0 {
+        return Ok((vec![0], Vec::new()));
+    }
+    let mut is_heading = vec![false; n];
+    let mut heading_indices: Vec<u32> = Vec::new();
+
+    // Only materialize Module rows for markdown `kind=heading` — never `get_node` every UUID.
+    store.for_each_node_of_type(NodeType::Module, |node| {
+        if node.get_property("kind") == Some("heading")
+            && let Some(view_idx) = view.get_index(node.id)
+        {
+            let pos = view_idx.index();
+            if !is_heading[pos] {
+                is_heading[pos] = true;
+                heading_indices.push(pos as u32);
+            }
+        }
+    })?;
+
+    if heading_indices.is_empty() {
+        return Ok(view.topo.undirected_csr_filtered(base, &[]));
+    }
+
+    let mut extra_pairs: Vec<(u32, u32)> = Vec::new();
+    for &u in &heading_indices {
+        for &v in view.topo.csr.out_neighbors_of_type(u, EdgeType::Contains) {
+            if is_heading[v as usize] {
+                extra_pairs.push((u, v));
+            }
+        }
+    }
+    Ok(view.topo.undirected_csr_filtered(base, &extra_pairs))
+}
+
 /// Community neighbor projection: behavioral edges plus scoped `Contains`.
 pub fn build_community_neighbor_lists(
     view: &PetGraphView,
     store: &SnapshotNodeStore,
 ) -> Result<Vec<Vec<usize>>> {
-    let base = default_community_edge_types();
-    let mut neighbors = build_filtered_neighbor_lists(view, base);
-    let mut is_heading = vec![false; neighbors.len()];
-    let mut heading_count = 0usize;
-
-    // Hot-column function count (no cold_ext). Only materialize Module rows for
-    // markdown `kind=heading` — never `get_node` every UUID on linux-scale graphs.
-    let function_count = store.count_nodes_by_type(NodeType::Function)?;
-    store.for_each_node_of_type(NodeType::Module, |node| {
-        if node.get_property("kind") == Some("heading")
-            && let Some(view_idx) = view.uuid_to_index.get(&node.id)
-        {
-            let pos = view_idx.index();
-            if !is_heading[pos] {
-                is_heading[pos] = true;
-                heading_count += 1;
-            }
-        }
-    })?;
-
-    // Fast path for code-heavy graphs without markdown headings: behavioral edges
-    // are sufficient and avoid scanning massive `Contains` edge sets on repos like linux.
-    if function_count > 0 && heading_count == 0 {
-        return Ok(neighbors);
-    }
-
-    // Keep adjacency dedupe O(1) during augmentation.
-    let mut dedup_neighbors: Vec<HashSet<usize>> = neighbors
-        .iter()
-        .map(|adj| adj.iter().copied().collect::<HashSet<_>>())
-        .collect();
-
-    store.for_each_edge(|from, to, ty| {
-        if ty != EdgeType::Contains {
-            return Ok(());
-        }
-        let Some(from_idx) = view.uuid_to_index.get(&from) else {
-            return Ok(());
-        };
-        let Some(to_idx) = view.uuid_to_index.get(&to) else {
-            return Ok(());
-        };
-        let u = from_idx.index();
-        let v = to_idx.index();
-        if is_heading[u] && is_heading[v] {
-            push_undirected_neighbor_set(&mut dedup_neighbors, u, v);
-        }
-        Ok(())
-    })?;
-
-    for (idx, set) in dedup_neighbors.into_iter().enumerate() {
-        neighbors[idx] = set.into_iter().collect();
+    let (offsets, targets) = build_community_undirected_csr(view, store)?;
+    let n = view.node_count();
+    let mut neighbors = Vec::with_capacity(n);
+    for u in 0..n {
+        let s = offsets[u] as usize;
+        let e = offsets[u + 1] as usize;
+        neighbors.push(targets[s..e].iter().map(|&v| v as usize).collect());
     }
     Ok(neighbors)
-}
-
-fn push_undirected_neighbor_set(neighbors: &mut [HashSet<usize>], u: usize, v: usize) {
-    if u == v {
-        return;
-    }
-    neighbors[u].insert(v);
-    neighbors[v].insert(u);
 }
 
 /// Dashboard community with inferred metadata (Phase 14 A+).
@@ -1672,7 +1679,7 @@ mod tests {
             let idxs: HashSet<usize> = community
                 .members
                 .iter()
-                .filter_map(|id| view.uuid_to_index.get(id).map(|n| n.index()))
+                .filter_map(|id| view.get_index(*id).map(|n| n.index()))
                 .collect();
             let start = *idxs.iter().next().unwrap();
             let mut seen = HashSet::from([start]);

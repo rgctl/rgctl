@@ -123,10 +123,10 @@ impl MmappedGraphSnapshot {
         if mmap[0..4] != SNAPSHOT_MAGIC {
             return Err(Error::SerdeError("invalid graph snapshot magic".into()));
         }
-        let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
+        let version = u32::from_le_bytes([mmap[4], mmap[5], mmap[6], mmap[7]]);
         let backing = match version {
             SNAPSHOT_VERSION_V1 => SnapshotBacking::Legacy(parse_v1_payload(&mmap)?),
-            v if v == 2 || v == 3 || v == crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION => {
+            v if (2..=crate::columnar_snapshot::COLUMNAR_SNAPSHOT_VERSION).contains(&v) => {
                 SnapshotBacking::Columnar(ColumnarGraphMmap::open(Arc::clone(&mmap))?)
             }
             other => {

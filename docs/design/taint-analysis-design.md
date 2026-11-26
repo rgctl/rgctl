@@ -72,8 +72,8 @@ This document specifies the **Taint Analysis, Sink-First Reachability, and OSV/O
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Monotone Information-Flow & Taint Lattice** | Denning & Denning (1977), *Certification of Programs for Secure Information Flow*; Livshits & Lam (2005) | [`TaintAnalyzer`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/taint.rs#L1-L320) propagates taint labels from matched `TaintSource` statements along PDG `DataDependency` edges (`(name, scope_id)`), tracking field-access paths (`req.body.user`) and computing a path vulnerability verdict based on whether a `TaintSanitizer` dominates the sink along the def-use chain. |
-| **Demand-Driven Backward Sink Reachability** | Arzt et al. (2014), *FlowDroid: Precise Context, Flow, Field, Object-Sensitive and Lifecycle-Aware Taint Analysis* | For `rgctl taint --sink <SYMBOL>` and `rgctl vuln analyze --osv <FILE>`, [`rgctl-security`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-security/src/lib.rs#L1-L180) starts at discovered call sites of the vulnerable sink (including third-party calls recorded in `parked_relations.bin`), walks backward up the call graph up to `--depth`, and checks intra-procedural PDG reachability from external entry/parameter sources. |
+| **Monotone Information-Flow & Taint Lattice** | Denning & Denning (1977), *Certification of Programs for Secure Information Flow*; Livshits & Lam (2005) | [`TaintAnalyzer`](../../crates/rgctl-analysis/src/taint.rs#L1-L320) propagates taint labels from matched `TaintSource` statements along PDG `DataDependency` edges (`(name, scope_id)`), tracking field-access paths (`req.body.user`) and computing a path vulnerability verdict based on whether a `TaintSanitizer` dominates the sink along the def-use chain. |
+| **Demand-Driven Backward Sink Reachability** | Arzt et al. (2014), *FlowDroid: Precise Context, Flow, Field, Object-Sensitive and Lifecycle-Aware Taint Analysis* | For `rgctl taint --sink <SYMBOL>` and `rgctl vuln analyze --osv <FILE>`, [`rgctl-security`](../../crates/rgctl-security/src/lib.rs#L1-L180) starts at discovered call sites of the vulnerable sink (including third-party calls recorded in `parked_relations.bin`), walks backward up the call graph up to `--depth`, and checks intra-procedural PDG reachability from external entry/parameter sources. |
 | **VEX (Vulnerability Exploitability eXchange) Justification Proofs** | CISA / OpenVEX Specification v0.2.0 | `rgctl vuln analyze` combines manifest dependency matching (`deps check`), package import census, call-site discovery (`parked_relations.bin`), and `.sink_taint` PDG verification to emit machine-readable OpenVEX verdicts (`component_not_present`, `vulnerable_code_not_in_execute_path`, or `affected`). |
 
 ---
@@ -118,7 +118,7 @@ pub struct SinkCallSite {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L701-L715) / [`src/cli/vuln_deps.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/vuln_deps.rs):
+Verified against `rgctl --help` and [`src/cli/mod.rs`](../../src/cli/mod.rs#L701-L715) / [`src/cli/vuln_deps.rs`](../../src/cli/vuln_deps.rs):
 
 ```bash
 # 1. Discover with CFG/PDG and discover-time taint (plus optional custom YAML rules)
@@ -175,10 +175,10 @@ rgctl -f sarif vuln scan --offline -o results.sarif
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Intra/Inter-Procedural Taint Engine** | [`crates/rgctl-analysis/src/taint.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/taint.rs) | `TaintAnalyzer`, `TaintFlow`, `TaintSource`, `TaintSink`, `TaintSanitizer`, `TaintRulePack` |
-| **OSV, Fetch, Stubs, Rules & SARIF** | [`crates/rgctl-security/src/lib.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-security/src/lib.rs) | `fetch_osv_for_repo`, `resolve_advisories_and_inventory`, `triage_osv_path`, `deps_check`, `vuln_analyze`, `load_or_build_dep_stubs`, `load_vuln_trigger_rules`, `analyze_results_to_sarif` |
-| **CLI Taint, Vuln & Deps Commands** | [`src/cli/vuln_deps.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/vuln_deps.rs), [`src/cli/slice.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice.rs) | `run_vuln_fetch`, `run_vuln_scan`, `run_vuln_analyze`, `run_deps_check`, `run_vuln_triage`, `taint_slice_json` |
-| **Dashboard Taint Export & UI** | [`crates/rgctl-dashboard/src/taint_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/taint_export.rs), [`dashboard/src/TaintView.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/TaintView.tsx) | `export_taint_index`, `TaintView` |
+| **Intra/Inter-Procedural Taint Engine** | [`crates/rgctl-analysis/src/taint.rs`](../../crates/rgctl-analysis/src/taint.rs) | `TaintAnalyzer`, `TaintFlow`, `TaintSource`, `TaintSink`, `TaintSanitizer`, `TaintRulePack` |
+| **OSV, Fetch, Stubs, Rules & SARIF** | [`crates/rgctl-security/src/lib.rs`](../../crates/rgctl-security/src/lib.rs) | `fetch_osv_for_repo`, `resolve_advisories_and_inventory`, `triage_osv_path`, `deps_check`, `vuln_analyze`, `load_or_build_dep_stubs`, `load_vuln_trigger_rules`, `analyze_results_to_sarif` |
+| **CLI Taint, Vuln & Deps Commands** | [`src/cli/vuln_deps.rs`](../../src/cli/vuln_deps.rs), [`src/cli/slice.rs`](../../src/cli/slice.rs) | `run_vuln_fetch`, `run_vuln_scan`, `run_vuln_analyze`, `run_deps_check`, `run_vuln_triage`, `taint_slice_json` |
+| **Dashboard Taint Export & UI** | [`crates/rgctl-dashboard/src/taint_export.rs`](../../crates/rgctl-dashboard/src/taint_export.rs), [`dashboard/src/TaintView.tsx`](../../dashboard/src/TaintView.tsx) | `export_taint_index`, `TaintView` |
 
 ---
 

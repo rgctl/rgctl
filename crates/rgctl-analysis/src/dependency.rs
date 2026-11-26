@@ -133,9 +133,7 @@ impl DependencyAnalyzer {
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
         let source = source_node.id;
         let source_idx = view
-            .uuid_to_index
-            .get(&source)
-            .copied()
+            .get_index(source)
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
 
         let mut affected = HashSet::new();
@@ -195,7 +193,9 @@ impl DependencyAnalyzer {
             .first()
             .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?
             .id;
-        let target_idx = view.uuid_to_index[&target];
+        let target_idx = view
+            .get_index(target)
+            .ok_or_else(|| Error::NodeNotFound(symbol_name.to_string()))?;
 
         let callers: Vec<String> = view
             .topo

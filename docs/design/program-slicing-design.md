@@ -55,9 +55,9 @@ This document specifies the **Intra- and Inter-Procedural Program Slicing subsys
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Executable Backward & Forward Program Slicing** | Weiser (1981), *Program Slicing* (*ICSE '81*); Ottenstein & Ottenstein (1984), *The Program Dependence Graph in a Software Development Environment* | [`compute_slice_with_options`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs#L1-L260) reduces Weiser's dataflow equations to graph reachability over `ProgramDependenceGraph` (`data_deps` $\cup$ `control_deps`) starting at criterion $C = (\text{line}, \text{variable})$. |
-| **Inter-Procedural System Dependence Graph (SDG) Slicing** | Horwitz, Reps & Binkley (1990), *Interprocedural Slicing Using Dependence Graphs* (*ACM TOPLAS*, 12(1)) | [`InterproceduralCFG`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs#L1-L240) and [`blast_slice_handoff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_slice_handoff.rs#L1-L150) bind call-site actual arguments to callee formal `Parameter` PDG nodes (`scope_id = 0`) and return statements back to caller call sites. |
-| **Demand-Driven Intra-Procedural May-Alias Expansion** | Steensgaard (1996); lightweight copy/reference propagation | When `--with-alias` is set, [`alias::may_alias_names`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/alias.rs#L1-L140) computes the transitive closure of local alias copies (`let b = &a`, `b.field = ...`) within the function and seeds the slice with all aliased variable names. |
+| **Executable Backward & Forward Program Slicing** | Weiser (1981), *Program Slicing* (*ICSE '81*); Ottenstein & Ottenstein (1984), *The Program Dependence Graph in a Software Development Environment* | [`compute_slice_with_options`](../../crates/rgctl-analysis/src/slicing.rs#L1-L260) reduces Weiser's dataflow equations to graph reachability over `ProgramDependenceGraph` (`data_deps` $\cup$ `control_deps`) starting at criterion $C = (\text{line}, \text{variable})$. |
+| **Inter-Procedural System Dependence Graph (SDG) Slicing** | Horwitz, Reps & Binkley (1990), *Interprocedural Slicing Using Dependence Graphs* (*ACM TOPLAS*, 12(1)) | [`InterproceduralCFG`](../../crates/rgctl-analysis/src/interprocedural_slicing.rs#L1-L240) and [`blast_slice_handoff.rs`](../../crates/rgctl-analysis/src/blast_slice_handoff.rs#L1-L150) bind call-site actual arguments to callee formal `Parameter` PDG nodes (`scope_id = 0`) and return statements back to caller call sites. |
+| **Demand-Driven Intra-Procedural May-Alias Expansion** | Steensgaard (1996); lightweight copy/reference propagation | When `--with-alias` is set, [`alias::may_alias_names`](../../crates/rgctl-analysis/src/alias.rs#L1-L140) computes the transitive closure of local alias copies (`let b = &a`, `b.field = ...`) within the function and seeds the slice with all aliased variable names. |
 
 ---
 
@@ -92,7 +92,7 @@ pub struct ProgramSlice {
 ### 3.2 Innermost Function Span Resolution & Lazy v3 Archive Append
 
 1. **Half-Open Byte-Span Function Lookup (`function_containing_line`):**
-   - When `--function` is omitted, [`src/cli/slice.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice.rs#L49-L58) converts `--line` to its 0-based byte offset (`line_start_byte`) and selects the function with the smallest half-open span `start_byte <= offset < end_byte`. This accurately disambiguates closures, nested functions, and adjacent methods.
+   - When `--function` is omitted, [`src/cli/slice.rs`](../../src/cli/slice.rs#L49-L58) converts `--line` to its 0-based byte offset (`line_start_byte`) and selects the function with the smallest half-open span `start_byte <= offset < end_byte`. This accurately disambiguates closures, nested functions, and adjacent methods.
 2. **Lazy Archive Caching (`ensure_cfg_pdg_for_source`):**
    - `rgctl slice` does **not** require a prior `rgctl discover --with-cfg`. If `.rgctl/analysis/cfg_pdg.archive.bin` does not exist or lacks the target function's `Uuid` / `stable_record_uuid`, `ensure_cfg_pdg_for_source` parses only that file, builds the CFG and PDG, and appends the `CfgPdgRecord` + updated 32-byte `TocEntry` footer (`TOC3`).
 
@@ -102,7 +102,7 @@ pub struct ProgramSlice {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl slice --help` and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L623-L653):
+Verified against `rgctl slice --help` and [`src/cli/mod.rs`](../../src/cli/mod.rs#L623-L653):
 
 ```bash
 # Backward slice on variable `cart` at line 42 (auto-resolves enclosing function; lazily caches CFG/PDG)
@@ -123,7 +123,7 @@ rgctl slice src/OrderService.java --line 42 --variable cart --view pdg -f json
 
 ### 4.2 JSON Schema (`rgctl slice <file> --line <N> --variable <V> -f json`)
 
-Implemented in [`src/cli/slice_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice_output.rs):
+Implemented in [`src/cli/slice_output.rs`](../../src/cli/slice_output.rs):
 
 ```json
 {
@@ -158,11 +158,11 @@ Implemented in [`src/cli/slice_output.rs`](file:///Users/sshaaf/git/rust/rgctl/r
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Intra-Procedural Slicer** | [`crates/rgctl-analysis/src/slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/slicing.rs) | `SliceCriterion`, `SliceDirection`, `SliceOptions`, `ProgramSlice`, `compute_slice_with_options` |
-| **Inter-Procedural Slicer & Handoff** | [`crates/rgctl-analysis/src/interprocedural_slicing.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/interprocedural_slicing.rs), [`blast_slice_handoff.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/blast_slice_handoff.rs) | `InterproceduralCFG`, `compute_interprocedural_slice`, `trace_blast_slices` |
-| **May-Alias Helper** | [`crates/rgctl-analysis/src/alias.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/alias.rs) | `may_alias_names` |
-| **Lazy Archive Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `ensure_cfg_pdg_for_source`, `EnsureCfgPdgOpts`, `index_function_locations` |
-| **CLI Slice Command** | [`src/cli/slice.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice.rs), [`src/cli/slice_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/slice_output.rs) | `SliceArgs`, `run`, `function_containing_line`, `text_slice_json`, `taint_slice_json` |
+| **Intra-Procedural Slicer** | [`crates/rgctl-analysis/src/slicing.rs`](../../crates/rgctl-analysis/src/slicing.rs) | `SliceCriterion`, `SliceDirection`, `SliceOptions`, `ProgramSlice`, `compute_slice_with_options` |
+| **Inter-Procedural Slicer & Handoff** | [`crates/rgctl-analysis/src/interprocedural_slicing.rs`](../../crates/rgctl-analysis/src/interprocedural_slicing.rs), [`blast_slice_handoff.rs`](../../crates/rgctl-analysis/src/blast_slice_handoff.rs) | `InterproceduralCFG`, `compute_interprocedural_slice`, `trace_blast_slices` |
+| **May-Alias Helper** | [`crates/rgctl-analysis/src/alias.rs`](../../crates/rgctl-analysis/src/alias.rs) | `may_alias_names` |
+| **Lazy Archive Builder** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `ensure_cfg_pdg_for_source`, `EnsureCfgPdgOpts`, `index_function_locations` |
+| **CLI Slice Command** | [`src/cli/slice.rs`](../../src/cli/slice.rs), [`src/cli/slice_output.rs`](../../src/cli/slice_output.rs) | `SliceArgs`, `run`, `function_containing_line`, `text_slice_json`, `taint_slice_json` |
 
 ---
 

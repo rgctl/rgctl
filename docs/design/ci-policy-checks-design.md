@@ -58,7 +58,7 @@ This document specifies the **CI Architectural Policy Gate, Temporal PR Review (
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Differential Static Analysis (Ratcheting / Baseline Suppression)** | Tricorder / ErrorProne (Sadowski et al., ICSE 2015); Differential Dataflow | Legacy codebases rarely pass strict architectural rules on day one. [`pr_check.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/pr_check.rs#L1-L260) diffs violations between `base` and `head` by `StableNodeKey`, failing CI only on **`NEW`** or **`REGRESSION`** violations (`scope.new_violations_only = true`) while tracking **`EXISTING`** technical debt in `violation_ledger.jsonl` and celebrating **`RESOLVED`** fixes. |
+| **Differential Static Analysis (Ratcheting / Baseline Suppression)** | Tricorder / ErrorProne (Sadowski et al., ICSE 2015); Differential Dataflow | Legacy codebases rarely pass strict architectural rules on day one. [`pr_check.rs`](../../src/cli/pr_check.rs#L1-L260) diffs violations between `base` and `head` by `StableNodeKey`, failing CI only on **`NEW`** or **`REGRESSION`** violations (`scope.new_violations_only = true`) while tracking **`EXISTING`** technical debt in `violation_ledger.jsonl` and celebrating **`RESOLVED`** fixes. |
 | **Scoped Upstream Closure Hydration** | Incremental reachability over Condensed SCC DAGs | Rather than hydrating two full `MemoryBackend` graphs in CI, `BlastRadiusEngine::build_scoped` walks reverse `Calls` CSR edges in `ColumnarGraphMmap` from the modified symbol set and hydrates only their upstream caller closure. |
 | **Automated Regression Bisection** | Zeller (1999), *Yesterday, My Program Worked. Today, It Does Not. Why?* (*ESEC/FSE*) | When `--bisect` is passed to `rgctl review check`, `rgctl` binary-searches the git commit range `base_ref..head_ref` ($O(\log C)$ steps) to pinpoint the exact commit SHA that introduced each new policy violation. |
 
@@ -100,7 +100,7 @@ See [`docs/policy-format.md`](../policy-format.md) and [`docs/examples/policy-st
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl check --help`, `rgctl review --help`, and [`src/cli/mod.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/mod.rs#L844-L918):
+Verified against `rgctl check --help`, `rgctl review --help`, and [`src/cli/mod.rs`](../../src/cli/mod.rs#L844-L918):
 
 ```bash
 # 1. Working-tree CI policy check on git-modified functions
@@ -158,10 +158,10 @@ rgctl review export --base-ref origin/main --head-ref HEAD --policy-file policy.
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Working-Tree Policy Check** | [`src/cli/check.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/check.rs), [`src/cli/check_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/check_output.rs) | `CheckArgs`, `run`, `changed_function_symbols` |
-| **Temporal PR Check & Bisect** | [`src/cli/pr_check.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/pr_check.rs), [`src/cli/pr_check_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/pr_check_output.rs), [`src/cli/temporal_prep.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/temporal_prep.rs) | `PrCheckArgs`, `seed_head_artifact_from_base`, `evaluate_temporal` |
-| **PR Call-Path Spines & Export** | [`src/cli/review.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/review.rs), [`src/cli/review_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/review_export.rs) | `ReviewCommands`, `run_paths`, `run_export` |
-| **Policy Schema & Evaluator** | [`src/cli/policy_file.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/policy_file.rs), [`crates/rgctl-analysis/src/policy.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/policy.rs) | `PolicyFile`, `PolicyRegistry`, `CalendarPolicy` |
+| **Working-Tree Policy Check** | [`src/cli/check.rs`](../../src/cli/check.rs), [`src/cli/check_output.rs`](../../src/cli/check_output.rs) | `CheckArgs`, `run`, `changed_function_symbols` |
+| **Temporal PR Check & Bisect** | [`src/cli/pr_check.rs`](../../src/cli/pr_check.rs), [`src/cli/pr_check_output.rs`](../../src/cli/pr_check_output.rs), [`src/cli/temporal_prep.rs`](../../src/cli/temporal_prep.rs) | `PrCheckArgs`, `seed_head_artifact_from_base`, `evaluate_temporal` |
+| **PR Call-Path Spines & Export** | [`src/cli/review.rs`](../../src/cli/review.rs), [`src/cli/review_export.rs`](../../src/cli/review_export.rs) | `ReviewCommands`, `run_paths`, `run_export` |
+| **Policy Schema & Evaluator** | [`src/cli/policy_file.rs`](../../src/cli/policy_file.rs), [`crates/rgctl-analysis/src/policy.rs`](../../crates/rgctl-analysis/src/policy.rs) | `PolicyFile`, `PolicyRegistry`, `CalendarPolicy` |
 
 ---
 

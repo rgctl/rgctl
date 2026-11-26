@@ -3,7 +3,7 @@
 use crate::columnar_snapshot::{
     ColumnarGraphMmap, StringPool, append_node_columnar, edge_digest_bytes,
 };
-use crate::csr::edge_type_to_u8;
+use crate::csr::{edge_type_from_u8, edge_type_to_u8};
 use crate::schema::{Edge, EdgeType, Node, NodeType};
 use crate::stable_key::{stable_key_from_node, stable_key_from_row};
 use rgctl_error::{Error, Result};
@@ -46,6 +46,68 @@ fn check_inv1_sorted_unique_nodes(col: &ColumnarGraphMmap) -> Result<()> {
 }
 
 fn check_inv2_sorted_unique_edges(col: &ColumnarGraphMmap) -> Result<()> {
+    if let Some(csr) = col.csr() {
+        let n = col.node_count();
+        let rp = csr.row_ptr();
+        let irp = csr.in_row_ptr();
+        if rp.len() != n + 1 || irp.len() != n + 1 {
+            return Err(inv_err("INV-2: CSR row_ptr length mismatch"));
+        }
+        for i in 0..n {
+            if rp[i] > rp[i + 1] || irp[i] > irp[i + 1] {
+                return Err(inv_err(format!(
+                    "INV-2: CSR row_ptr non-monotonic at node {i}"
+                )));
+            }
+        }
+        for u in 0..n as u32 {
+            let (targets, types) = csr.out_neighbors(u);
+            let mut prev: Option<(u8, u32)> = None;
+            for (i, &dst) in targets.iter().enumerate() {
+                if dst as usize >= n {
+                    return Err(inv_err(format!(
+                        "INV-2: dangling CSR target {dst} from node {u}"
+                    )));
+                }
+                let ty = types[i];
+                let key = (ty, dst);
+                if let Some(p) = prev
+                    && key <= p
+                {
+                    return Err(inv_err(format!(
+                        "INV-2: CSR out slice not strictly sorted/unique at node {u}: {key:?} <= {p:?}"
+                    )));
+                }
+                prev = Some(key);
+                let et = edge_type_from_u8(ty)?;
+                if csr.in_neighbors_of_type(dst, et).binary_search(&u).is_err() {
+                    return Err(inv_err(format!(
+                        "INV-2: CSR transpose missing incoming edge {u}->{dst} ({et:?})"
+                    )));
+                }
+            }
+            let (in_targets, in_types) = csr.in_neighbors(u);
+            let mut in_prev: Option<(u8, u32)> = None;
+            for (i, &src) in in_targets.iter().enumerate() {
+                if src as usize >= n {
+                    return Err(inv_err(format!(
+                        "INV-2: dangling CSR source {src} into node {u}"
+                    )));
+                }
+                let key = (in_types[i], src);
+                if let Some(p) = in_prev
+                    && key <= p
+                {
+                    return Err(inv_err(format!(
+                        "INV-2: CSR in slice not strictly sorted/unique at node {u}: {key:?} <= {p:?}"
+                    )));
+                }
+                in_prev = Some(key);
+            }
+        }
+        return Ok(());
+    }
+
     let mut node_ids: HashSet<Uuid> = HashSet::with_capacity(col.node_count());
     for (_, id) in col.node_ids_by_index() {
         node_ids.insert(id);
@@ -125,14 +187,9 @@ fn is_container(nt: NodeType) -> bool {
 }
 
 fn check_inv3_endpoint_legality(col: &ColumnarGraphMmap) -> Result<()> {
-    for idx in 0..col.edge_count() {
-        let (from, to, edge_type) = col.edge_at(idx)?;
-        let from_idx = col
-            .find_node_index(from)
-            .ok_or_else(|| inv_err(format!("INV-3: missing from node {from}")))?;
-        let to_idx = col
-            .find_node_index(to)
-            .ok_or_else(|| inv_err(format!("INV-3: missing to node {to}")))?;
+    col.for_each_edge_indexed(|from_u32, to_u32, edge_type| {
+        let from_idx = from_u32 as usize;
+        let to_idx = to_u32 as usize;
         let from_type = col.node_type_at(from_idx)?;
         let to_type = col.node_type_at(to_idx)?;
         match edge_type {
@@ -161,6 +218,8 @@ fn check_inv3_endpoint_legality(col: &ColumnarGraphMmap) -> Result<()> {
                         | NodeType::AnsibleHandler
                 );
                 if !from_ok || !to_ok {
+                    let from = col.node_id_at(from_idx)?;
+                    let to = col.node_id_at(to_idx)?;
                     return Err(inv_err(format!(
                         "INV-3: Calls requires callable endpoints, got {from_type:?}→{to_type:?} ({from}→{to})"
                     )));
@@ -168,20 +227,23 @@ fn check_inv3_endpoint_legality(col: &ColumnarGraphMmap) -> Result<()> {
             }
             EdgeType::Extends | EdgeType::Implements | EdgeType::Permits => {
                 if !is_inheritance_endpoint(from_type) || !is_inheritance_endpoint(to_type) {
+                    let from = col.node_id_at(from_idx)?;
+                    let to = col.node_id_at(to_idx)?;
                     return Err(inv_err(format!(
                         "INV-3: {edge_type:?} requires type/import endpoints, got {from_type:?}→{to_type:?} ({from}→{to})"
                     )));
                 }
             }
             EdgeType::Contains if !is_container(from_type) => {
+                let from = col.node_id_at(from_idx)?;
                 return Err(inv_err(format!(
                     "INV-3: Contains source must be a container, got {from_type:?} ({from})"
                 )));
             }
             _ => {}
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn check_inv4_stable_key_consistency(col: &ColumnarGraphMmap) -> Result<()> {
@@ -272,10 +334,17 @@ fn check_inv6_content_digest(col: &ColumnarGraphMmap) -> Result<()> {
     }
     // Writer digests in id order; rematerialized rows are already sorted (INV-1).
     let mut edges = Vec::with_capacity(col.edge_count());
-    for idx in 0..col.edge_count() {
-        let (from, to, edge_type) = col.edge_at(idx)?;
+    col.for_each_edge(|from, to, edge_type| {
         edges.push(Edge::new(from, to, edge_type));
-    }
+        Ok(())
+    })?;
+    edges.sort_by(|a, b| {
+        (a.from, a.to, edge_type_to_u8(a.edge_type)).cmp(&(
+            b.from,
+            b.to,
+            edge_type_to_u8(b.edge_type),
+        ))
+    });
     let recomputed = recompute_content_digest(&nodes, &edges)?;
     if recomputed != col.content_digest() {
         return Err(inv_err(format!(

@@ -55,7 +55,7 @@ This document specifies the **per-function Control-Flow Graph (CFG) subsystem** 
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Maximal Basic Blocks & Leader Partitioning** | Aho, Lam, Sethi & Ullman (2006), *Compilers: Principles, Techniques, and Tools* (Dragon Book, §8.4) | [`CfgBuilder`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_builder.rs#L1-L260) splits linear statement sequences at branch conditions, merge targets, loop headers, and exception handlers into `BasicBlock` records with explicit `BlockKind` (`Entry`, `Normal`, `Branch`, `LoopHeader`, `LoopBody`, `TryBlock`, `CatchBlock`, `FinallyBlock`, `Exit`). |
+| **Maximal Basic Blocks & Leader Partitioning** | Aho, Lam, Sethi & Ullman (2006), *Compilers: Principles, Techniques, and Tools* (Dragon Book, §8.4) | [`CfgBuilder`](../../crates/rgctl-analysis/src/cfg_builder.rs#L1-L260) splits linear statement sequences at branch conditions, merge targets, loop headers, and exception handlers into `BasicBlock` records with explicit `BlockKind` (`Entry`, `Normal`, `Branch`, `LoopHeader`, `LoopBody`, `TryBlock`, `CatchBlock`, `FinallyBlock`, `Exit`). |
 | **Short-Circuit Boolean Evaluation Lowering** | Clarke & Emerson (1981); standard compiler IR lowering for `&&` / `\|\|` | `wire_condition` decomposes compound `&&` and `\|\|` expressions (and Rust `let_condition` chains) into intermediate conditional basic blocks with `TrueBranch` / `FalseBranch` edges so short-circuit control dependencies are preserved in the PDG. |
 | **Lexical Scope-Indexed Statement IR** | Cytron et al. (1991), *Efficiently Computing Static Single Assignment Form and the Control Dependence Graph* | As `CfgBuilder` walks nested AST blocks, it maintains a monotonic `scope_id` stack (`ScopeStack`). Every variable definition (`defs`) and reference (`uses`) on a `Statement` is tagged with `(name, scope_id)` so inner variable shadowing never aliases outer declarations while RHS-before-LHS (`let x = x + 1`) resolves accurately. |
 | **Structured Exception & Resource Unwind** | Gosling et al., *Java Language Specification* (§14.20); Rust `?` (`Try`) operator semantics | `try`/`catch`/`finally`, Java `try-with-resources` (synthetic reverse-order `.close()` calls), C# `using`/`lock`, and Rust `?` (`try_expression`) emit explicit `Exception` and `Finally` edges to handler blocks or the terminal `Exit` sink. |
@@ -86,7 +86,7 @@ pub struct ControlFlowGraph {
 
 ### 3.2 `RBCP` v3 Indexed Archive Layout (`.rgctl/analysis/cfg_pdg.archive.bin`)
 
-Defined in [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs#L28-L185):
+Defined in [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs#L28-L185):
 
 ```text
 +-----------------------------------------------------------------------+
@@ -134,7 +134,7 @@ Defined in [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs):
+Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](../../src/cli/inspect.rs):
 
 ```bash
 # Optional whole-repo CFG/PDG precomputation during discover
@@ -152,7 +152,7 @@ rgctl inspect <symbol> --file src/Service.java --class Service --line 42 cfg -f 
 
 ### 4.2 JSON Schema (`rgctl inspect <symbol> cfg -f json`)
 
-Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs):
+Implemented in [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs):
 
 ```json
 {
@@ -191,11 +191,11 @@ Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **CFG Data Structures** | [`crates/rgctl-analysis/src/cfg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg.rs) | `ControlFlowGraph`, `BasicBlock`, `BlockId`, `BlockKind`, `CfgEdge`, `CfgEdgeKind`, `Statement` |
-| **Multi-Language AST Lowering** | [`crates/rgctl-analysis/src/cfg_builder.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_builder.rs) | `CfgBuilder`, `build_cfg_for_function`, `wire_condition`, `ScopeStack` |
-| **v3 Mmap Archive & Lazy Append** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchive`, `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
-| **CLI Inspect Command** | [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs), [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs) | `run`, `InspectArgs`, `inspect_cfg_json`, `cfg_to_mermaid`, `cfg_to_dot` |
-| **Dashboard Export & UI** | [`crates/rgctl-dashboard/src/cfg_export.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-dashboard/src/cfg_export.rs), [`dashboard/src/CfgView.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/CfgView.tsx) | `export_cfg_index`, `CfgView` |
+| **CFG Data Structures** | [`crates/rgctl-analysis/src/cfg.rs`](../../crates/rgctl-analysis/src/cfg.rs) | `ControlFlowGraph`, `BasicBlock`, `BlockId`, `BlockKind`, `CfgEdge`, `CfgEdgeKind`, `Statement` |
+| **Multi-Language AST Lowering** | [`crates/rgctl-analysis/src/cfg_builder.rs`](../../crates/rgctl-analysis/src/cfg_builder.rs) | `CfgBuilder`, `build_cfg_for_function`, `wire_condition`, `ScopeStack` |
+| **v3 Mmap Archive & Lazy Append** | [`crates/rgctl-analysis/src/cfg_pdg_archive.rs`](../../crates/rgctl-analysis/src/cfg_pdg_archive.rs) | `CfgPdgArchive`, `CfgPdgArchiveMmap`, `CfgPdgRecord`, `TocEntry`, `ensure_cfg_pdg_for_source` |
+| **CLI Inspect Command** | [`src/cli/inspect.rs`](../../src/cli/inspect.rs), [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs) | `run`, `InspectArgs`, `inspect_cfg_json`, `cfg_to_mermaid`, `cfg_to_dot` |
+| **Dashboard Export & UI** | [`crates/rgctl-dashboard/src/cfg_export.rs`](../../crates/rgctl-dashboard/src/cfg_export.rs), [`dashboard/src/CfgView.tsx`](../../dashboard/src/CfgView.tsx) | `export_cfg_index`, `CfgView` |
 
 ---
 

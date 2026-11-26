@@ -5,8 +5,11 @@
 //! topology `Vec`, keeping only endpoints present in the alive set.
 //! Output is written to a temp path then atomically renamed.
 
-use crate::columnar_snapshot::{ColumnarGraphMmap, EdgeRow, StringPool, write_columnar_assembled};
-use crate::csr::{edge_type_from_u8, edge_type_to_u8};
+use crate::columnar_snapshot::{
+    ColumnarGraphMmap, StringPool, encode_edge_pad, find_node_row_index,
+    write_columnar_assembled_csr,
+};
+use crate::csr::{CodeGraphCsr, edge_type_from_u8, edge_type_to_u8};
 use crate::normalize_path_str;
 use crate::schema::{Edge, Node};
 use crate::snapshot::MmappedGraphSnapshot;
@@ -109,9 +112,9 @@ fn dedupe_entries_prefer_delta(entries: &mut Vec<CompactNodeEntry>) {
     *entries = out;
 }
 
-fn dedupe_sorted_edges(edge_meta: &mut Vec<(Uuid, Uuid, u8)>) {
-    edge_meta.sort();
-    edge_meta.dedup();
+fn dedupe_sorted_edges(edge_meta: &mut Vec<(Uuid, Uuid, u8, [u8; 7])>) {
+    edge_meta.sort_by_key(|e| (e.0, e.1, e.2, e.3));
+    edge_meta.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1 && a.2 == b.2);
 }
 
 impl<'a> GraphCompactor<'a> {
@@ -198,49 +201,69 @@ impl<'a> GraphCompactor<'a> {
         // Keep base edges only when both endpoints are alive and the source (`from`)
         // is still a kept base node (its file was not invalidated). Invalidated-source
         // edges are replaced by `delta.new_edges` so omitted CALLs stay omitted (#124).
-        let mut edge_meta: Vec<(Uuid, Uuid, u8)> = Vec::new();
-        self.base.for_each_edge(|from, to, edge_type| {
-            if node_alive(&entries, from)
-                && node_alive(&entries, to)
-                && source_is_base(&entries, from)
-            {
-                edge_meta.push((from, to, edge_type_to_u8(edge_type)));
-                stats.edges_kept += 1;
-            } else {
-                stats.edges_dropped += 1;
-            }
-            Ok(())
-        })?;
+        let mut edge_meta: Vec<(Uuid, Uuid, u8, [u8; 7])> = Vec::new();
+        self.base
+            .for_each_edge_with_pad(|from, to, edge_type, pad| {
+                if node_alive(&entries, from)
+                    && node_alive(&entries, to)
+                    && source_is_base(&entries, from)
+                {
+                    edge_meta.push((from, to, edge_type_to_u8(edge_type), pad));
+                    stats.edges_kept += 1;
+                } else {
+                    stats.edges_dropped += 1;
+                }
+                Ok(())
+            })?;
 
         for edge in &self.delta.new_edges {
             if node_alive(&entries, edge.from) && node_alive(&entries, edge.to) {
-                edge_meta.push((edge.from, edge.to, edge_type_to_u8(edge.edge_type)));
+                edge_meta.push((
+                    edge.from,
+                    edge.to,
+                    edge_type_to_u8(edge.edge_type),
+                    encode_edge_pad(edge),
+                ));
                 stats.edges_from_delta += 1;
             }
         }
 
         dedupe_sorted_edges(&mut edge_meta);
 
-        let mut edge_rows = Vec::with_capacity(edge_meta.len());
-        for (from, to, edge_type) in edge_meta {
+        let mut indexed_edges = Vec::with_capacity(edge_meta.len());
+        let mut cached_from: Option<([u8; 16], u32)> = None;
+        for (from, to, edge_type, pad) in edge_meta {
+            let from_bytes = *from.as_bytes();
+            let src = match cached_from {
+                Some((prev, idx)) if prev == from_bytes => idx,
+                _ => {
+                    let Some(idx) = find_node_row_index(&node_rows, &from_bytes) else {
+                        continue;
+                    };
+                    cached_from = Some((from_bytes, idx));
+                    idx
+                }
+            };
+            let Some(dst) = find_node_row_index(&node_rows, to.as_bytes()) else {
+                continue;
+            };
             let canonical = Edge::new(from, to, edge_type_from_u8(edge_type)?);
             hasher.update(&crate::columnar_snapshot::edge_digest_bytes(&canonical)?);
-            edge_rows.push(EdgeRow {
-                from: *from.as_bytes(),
-                to: *to.as_bytes(),
-                edge_type,
-                _pad: [0; 7],
-            });
+            indexed_edges.push((src, dst, edge_type, pad));
         }
 
         let content_digest = hasher.finalize().to_hex().to_string();
         stats.content_digest = content_digest.clone();
+        let (csr, sparse_pads) =
+            CodeGraphCsr::from_indexed_edges_with_pads(node_rows.len(), &indexed_edges);
+        drop(indexed_edges);
 
         let tmp_path = output_path.with_extension("bin.tmp");
-        write_columnar_assembled(
+        write_columnar_assembled_csr(
             &tmp_path,
             &node_rows,
-            &edge_rows,
+            &csr,
+            &sparse_pads,
             &strings,
             &extensions_blob,
             &name_index,

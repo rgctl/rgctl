@@ -1,6 +1,6 @@
 # Graph Centrality & Network Metrics — Engineering Design
 
-This document specifies the **Macro Graph Centrality, Network Metrics, and Git Churn Hotspot subsystem** in `rgctl` (`crates/rgctl-analysis/src/centrality.rs`, `centrality_approx.rs`, `git_churn.rs`, `results.rs`, and `src/cli/metrics.rs`). It covers pull-based CSR `FastPageRank`, exact and degree-stratified `SampledBetweenness` ($K = 512$), exact-bitset and HyperLogLog `HyperBallHarmonic` ($p \in \{14, 12, 10\}$), `NodeRole` filtering, and columnar `.rgctl/analysis_results.bin` persistence.
+This document specifies the **Macro Graph Centrality, Network Metrics, and Git Churn Hotspot subsystem** in `rgctl` (`crates/rgctl-analysis/src/centrality.rs`, `centrality_approx.rs`, `git_churn.rs`, `results.rs`, and `src/cli/metrics.rs`). It covers pull-based CSR `FastPageRank`, exact and active-pivot `SampledBetweenness` ($K = 512$), Beamer direction-optimizing exact `HarmonicCentrality`, exact-bitset and HyperLogLog `HyperBallHarmonic` ($p \in \{14, 12, 10\}$), `NodeRole` filtering, and columnar `.rgctl/analysis_results.bin` persistence. For the underlying zero-copy CSR layout and typed sub-slice indexing, see [**CSR Topology & Zero-Copy Graph Architecture**](csr-topology-architecture.md).
 
 ![Functions tab — centrality columns (gbuilder)](../images/design/graph-metrics/graph-metrics-functions-table.png)
 
@@ -56,10 +56,10 @@ This document specifies the **Macro Graph Centrality, Network Metrics, and Git C
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Pull-Based CSR PageRank** | Page, Brin, Motwani & Winograd (1998); Gargiulo et al. (2015), *Componentwise PageRank* | [`FastPageRank::compute_flat`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality.rs#L170-L360) precomputes `inv_out_deg[u]` and pulls incoming neighbor contributions across contiguous CSR slices (`rev_offsets`, `rev_sources`), redistributing dangling-node mass uniformly each round and filtering hotspots by `NodeRole::Production` unless `--include-tests` is passed. |
-| **Brandes Betweenness & Degree-Stratified Pivot Sampling** | Brandes (2001), *A Faster Algorithm for Betweenness Centrality*; Geisberger, Sanders & Schultes (2008), *Better Approximation of Betweenness Centrality* | [`CentralityCalculator`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality.rs#L520-L640) runs exact Brandes for $V \le 500$ (`DEFAULT_EXACT_CENTRALITY_LIMIT = 500`) and [`SampledBetweenness`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality_approx.rs#L65-L260) with $K = 512$ (`DEFAULT_SAMPLE_PIVOTS = 512`) degree-stratified pivots (50% highest total-degree hubs + 50% deterministic stride) scaled by $N/K$ for $V > 500$. |
-| **HyperBall Harmonic Centrality** | Boldi & Vigna (2013), *In-Core Computation of Geometric Centralities with HyperBall: A Hundred Billion Nodes and Beyond* | [`HyperBallHarmonic`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality_approx.rs#L275-L520) evaluates $H(v) = \sum_{d=1}^{R} \frac{|B(v, d)| - |B(v, d-1)|}{d}$ using exact 64-bit word `BitSet` unions when $V \le 8,192$ (`HYPERBALL_EXACT_THRESHOLD`) and register-wise max-merge HyperLogLog counters ($p = 14$ for $V \le 8,192$, $p = 12$ for $V \le 100,000$, $p = 10$ for $V > 100,000$) over $R = 16$ rounds ($R = 8$ when $V > 500,000$). |
-| **Temporal Change Coupling & Churn Hotspots** | Tornhill (2015), *Your Code as a Crime Scene*; Graves et al. (2000), *Predicting Fault Incidence Using Software Change History* | [`git_churn.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/git_churn.rs#L1-L220) streams `git log` over `--git-since` (default `90.days`), weights commit frequency by exponential recency decay $\times \log_2(1 + \text{cyclomatic\_complexity})$, and emits `EdgeType::CoChangesWith` edges between files modified together. |
+| **Pull-Based CSR PageRank** | Page, Brin, Motwani & Winograd (1998); Gargiulo et al. (2015), *Componentwise PageRank* | [`FastPageRank::compute_flat`](../../crates/rgctl-analysis/src/centrality.rs#L170-L360) precomputes `inv_out_deg[u]` and pulls incoming neighbor contributions across contiguous CSR slices (`rev_offsets`, `rev_sources`), redistributing dangling-node mass uniformly each round and filtering hotspots by `NodeRole::Production` unless `--include-tests` is passed. |
+| **Brandes Betweenness & Degree-Stratified Pivot Sampling** | Brandes (2001), *A Faster Algorithm for Betweenness Centrality*; Geisberger, Sanders & Schultes (2008), *Better Approximation of Betweenness Centrality* | [`CentralityCalculator`](../../crates/rgctl-analysis/src/centrality.rs#L520-L640) runs exact Brandes for $V \le 500$ (`DEFAULT_EXACT_CENTRALITY_LIMIT = 500`) and [`SampledBetweenness`](../../crates/rgctl-analysis/src/centrality_approx.rs#L65-L260) with $K = 512$ (`DEFAULT_SAMPLE_PIVOTS = 512`) degree-stratified pivots (50% highest total-degree hubs + 50% deterministic stride) scaled by $N/K$ for $V > 500$. |
+| **HyperBall Harmonic Centrality** | Boldi & Vigna (2013), *In-Core Computation of Geometric Centralities with HyperBall: A Hundred Billion Nodes and Beyond* | [`HyperBallHarmonic`](../../crates/rgctl-analysis/src/centrality_approx.rs#L275-L520) evaluates $H(v) = \sum_{d=1}^{R} \frac{|B(v, d)| - |B(v, d-1)|}{d}$ using exact 64-bit word `BitSet` unions when $V \le 8,192$ (`HYPERBALL_EXACT_THRESHOLD`) and register-wise max-merge HyperLogLog counters ($p = 14$ for $V \le 8,192$, $p = 12$ for $V \le 100,000$, $p = 10$ for $V > 100,000$) over $R = 16$ rounds ($R = 8$ when $V > 500,000$). |
+| **Temporal Change Coupling & Churn Hotspots** | Tornhill (2015), *Your Code as a Crime Scene*; Graves et al. (2000), *Predicting Fault Incidence Using Software Change History* | [`git_churn.rs`](../../crates/rgctl-analysis/src/git_churn.rs#L1-L220) streams `git log` over `--git-since` (default `90.days`), weights commit frequency by exponential recency decay $\times \log_2(1 + \text{cyclomatic\_complexity})$, and emits `EdgeType::CoChangesWith` edges between files modified together. |
 
 ---
 
@@ -79,7 +79,7 @@ This document specifies the **Macro Graph Centrality, Network Metrics, and Git C
 
 ### 3.2 Columnar Persistence (`.rgctl/analysis_results.bin`)
 
-Defined in [`crates/rgctl-analysis/src/results.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/results.rs):
+Defined in [`crates/rgctl-analysis/src/results.rs`](../../crates/rgctl-analysis/src/results.rs):
 - Stores flat `Vec<f64>` / `Vec<f32>` columns indexed by dense node index (`0..V`) inside `CentralityTable` (`pagerank`, `betweenness`, `harmonic`, `degree`) rather than `HashMap<Uuid, f64>`, eliminating per-node hash-table overhead on 1M+ node repositories.
 
 ---
@@ -88,7 +88,7 @@ Defined in [`crates/rgctl-analysis/src/results.rs`](file:///Users/sshaaf/git/rus
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl metrics --help` and [`src/cli/metrics.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/metrics.rs):
+Verified against `rgctl metrics --help` and [`src/cli/metrics.rs`](../../src/cli/metrics.rs):
 
 ```bash
 # Discover with optional harmonic centrality and git churn / co-change edges
@@ -144,11 +144,11 @@ rgctl metrics --churn -f json
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **PageRank & Exact Centrality** | [`crates/rgctl-analysis/src/centrality.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality.rs) | `FastPageRank`, `PageRankConfig`, `NodeRole`, `CentralityCalculator` |
-| **Approximate Betweenness & Harmonic** | [`crates/rgctl-analysis/src/centrality_approx.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/centrality_approx.rs) | `SampledBetweenness`, `HyperBallHarmonic`, `ApproximateCentrality` |
-| **Git Churn & Co-Change Analysis** | [`crates/rgctl-analysis/src/git_churn.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/git_churn.rs) | `GitChurnAnalyzer`, `FileChurnMetrics` |
-| **Columnar Results Table** | [`crates/rgctl-analysis/src/results.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/results.rs) | `AnalysisResults`, `CentralityTable`, `CommunityTable` |
-| **CLI Metrics Command** | [`src/cli/metrics.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/metrics.rs), [`src/cli/metrics_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/metrics_output.rs) | `MetricsArgs`, `run`, `collect_churn_hotspots` |
+| **PageRank & Exact Centrality** | [`crates/rgctl-analysis/src/centrality.rs`](../../crates/rgctl-analysis/src/centrality.rs) | `FastPageRank`, `PageRankConfig`, `NodeRole`, `CentralityCalculator` |
+| **Approximate Betweenness & Harmonic** | [`crates/rgctl-analysis/src/centrality_approx.rs`](../../crates/rgctl-analysis/src/centrality_approx.rs) | `SampledBetweenness`, `HyperBallHarmonic`, `ApproximateCentrality` |
+| **Git Churn & Co-Change Analysis** | [`crates/rgctl-analysis/src/git_churn.rs`](../../crates/rgctl-analysis/src/git_churn.rs) | `GitChurnAnalyzer`, `FileChurnMetrics` |
+| **Columnar Results Table** | [`crates/rgctl-analysis/src/results.rs`](../../crates/rgctl-analysis/src/results.rs) | `AnalysisResults`, `CentralityTable`, `CommunityTable` |
+| **CLI Metrics Command** | [`src/cli/metrics.rs`](../../src/cli/metrics.rs), [`src/cli/metrics_output.rs`](../../src/cli/metrics_output.rs) | `MetricsArgs`, `run`, `collect_churn_hotspots` |
 
 ---
 

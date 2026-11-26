@@ -404,3 +404,53 @@ fn incremental_update_repo_zero_cold_ext() {
         "watch / --files update_repo_files must decode 0 cold extensions"
     );
 }
+
+#[test]
+fn structured_query_csr_callers_relations_inventory_zero_cold_ext() {
+    use rgctl_graph::{InventoryBy, QueryFilters, RelationDirection, StructuredQuery};
+
+    let _cold = lock_cold_counter();
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("g.bin");
+    write_chain_graph(&path, 2_000);
+    let store = SnapshotNodeStore::open(&path).unwrap();
+    let engine = StructuredQuery::new(&store);
+    let filters = QueryFilters::default();
+
+    reset_cold_ext_deserialization_count();
+    let callers = engine
+        .call_neighbors("f100", true, 2, &filters)
+        .expect("callers");
+    assert_eq!(callers.neighbors.len(), 2);
+    let callees = engine
+        .call_neighbors("f100", false, 2, &filters)
+        .expect("callees");
+    assert_eq!(callees.neighbors.len(), 2);
+    let rels = engine
+        .relations(
+            Some("f100"),
+            EdgeType::Calls,
+            RelationDirection::Both,
+            None,
+            None,
+            2,
+            &filters,
+        )
+        .expect("seeded relations");
+    assert_eq!(rels.total, 4);
+    let inv = engine
+        .inventory(InventoryBy::Edge, &filters)
+        .expect("edge inventory");
+    let calls_count = inv
+        .counts
+        .iter()
+        .find(|c| c.key == "calls")
+        .map(|c| c.count)
+        .unwrap_or(0);
+    assert_eq!(calls_count, 1_999);
+    assert_eq!(
+        cold_ext_deserialization_count(),
+        0,
+        "v5 zero-copy CSR callers/callees/seeded-relations/edge-inventory must decode 0 cold extensions"
+    );
+}

@@ -28,7 +28,9 @@ fn sorted_function_impact(backend: &MemoryBackend, ids: &[Uuid]) -> Vec<Uuid> {
 fn test_type_isolation_incoming_filtered() {
     let backend = mixed_edge_hub();
     let view = PetGraphView::from_backend(&backend).unwrap();
-    let target_idx = view.uuid_to_index[&backend.find_nodes_by_name("target").unwrap()[0].id];
+    let target_idx = view
+        .get_index(backend.find_nodes_by_name("target").unwrap()[0].id)
+        .unwrap();
 
     let call_incoming: Vec<_> = view
         .incoming_filtered(target_idx, &[EdgeType::Calls])

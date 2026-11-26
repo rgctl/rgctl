@@ -15,6 +15,28 @@ pub fn collect_upstream_call_closure(
     store: &SnapshotNodeStore,
     seeds: &HashSet<Uuid>,
 ) -> Result<HashSet<Uuid>> {
+    if let Some((col, csr)) = store.columnar().and_then(|c| c.csr().map(|csr| (c, csr))) {
+        let mut seen_idx = HashSet::with_capacity(seeds.len() * 2);
+        let mut queue = std::collections::VecDeque::with_capacity(seeds.len());
+        let mut all = seeds.clone();
+        for &id in seeds {
+            if let Some(idx) = col.find_node_index(id)
+                && seen_idx.insert(idx as u32)
+            {
+                queue.push_back(idx as u32);
+            }
+        }
+        while let Some(u) = queue.pop_front() {
+            for &pred in csr.in_neighbors_of_type(u, EdgeType::Calls) {
+                if seen_idx.insert(pred) {
+                    all.insert(col.node_id_at(pred as usize)?);
+                    queue.push_back(pred);
+                }
+            }
+        }
+        return Ok(all);
+    }
+
     let mut all = seeds.clone();
     let mut frontier = seeds.clone();
     while !frontier.is_empty() {
@@ -38,6 +60,26 @@ pub fn hydrate_subset(store: &SnapshotNodeStore, ids: &HashSet<Uuid>) -> Result<
             backend.insert_node(node)?;
         }
     }
+    if let Some((col, csr)) = store.columnar().and_then(|c| c.csr().map(|csr| (c, csr))) {
+        let mut idx_set: HashSet<u32> = HashSet::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(idx) = col.find_node_index(id) {
+                idx_set.insert(idx as u32);
+            }
+        }
+        for &u in &idx_set {
+            let from = col.node_id_at(u as usize)?;
+            let (targets, types) = csr.out_neighbors(u);
+            for (i, &v) in targets.iter().enumerate() {
+                if idx_set.contains(&v) {
+                    let to = col.node_id_at(v as usize)?;
+                    let et = rgctl_graph::csr::edge_type_from_u8(types[i])?;
+                    backend.insert_edge(Edge::new(from, to, et))?;
+                }
+            }
+        }
+        return Ok(backend);
+    }
     store.for_each_edge(|from, to, edge_type| {
         if ids.contains(&from) && ids.contains(&to) {
             backend.insert_edge(Edge::new(from, to, edge_type))?;
@@ -51,11 +93,27 @@ pub fn hydrate_subset(store: &SnapshotNodeStore, ids: &HashSet<Uuid>) -> Result<
 pub fn hydrate_subset_hot(store: &SnapshotNodeStore, ids: &HashSet<Uuid>) -> Result<MemoryBackend> {
     let mut backend = MemoryBackend::new();
     if let Some(col) = store.columnar() {
+        let mut idx_set: HashSet<u32> = HashSet::with_capacity(ids.len());
         for id in ids {
             let Some(idx) = col.find_node_index(*id) else {
                 continue;
             };
+            idx_set.insert(idx as u32);
             backend.insert_node(col.materialize_node_hot_at(idx)?)?;
+        }
+        if let Some(csr) = col.csr() {
+            for &u in &idx_set {
+                let from = col.node_id_at(u as usize)?;
+                let (targets, types) = csr.out_neighbors(u);
+                for (i, &v) in targets.iter().enumerate() {
+                    if idx_set.contains(&v) {
+                        let to = col.node_id_at(v as usize)?;
+                        let et = rgctl_graph::csr::edge_type_from_u8(types[i])?;
+                        backend.insert_edge(Edge::new(from, to, et))?;
+                    }
+                }
+            }
+            return Ok(backend);
         }
     } else {
         for id in ids {

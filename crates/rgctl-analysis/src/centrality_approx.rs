@@ -761,7 +761,7 @@ mod tests {
         let sampled = SampledBetweenness::compute_flat(&index, 64, 42);
         let exact = BetweennessCentrality::compute_unbounded(&view, &[EdgeType::Calls]);
 
-        let bridge_flat = view.uuid_to_index[&id_bridge].index();
+        let bridge_flat = view.get_index(id_bridge).unwrap().index();
         let bridge_sampled = sampled[bridge_flat];
         let bridge_exact = exact.get(&id_bridge).copied().unwrap_or(0.0);
         assert!(
@@ -779,8 +779,8 @@ mod tests {
         let (view, ids) = line_graph(8);
         let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
         let harmonic = HyperBallHarmonic::compute_flat(&index, 8);
-        let head = view.uuid_to_index[&ids[0]].index();
-        let tail = view.uuid_to_index[&ids[7]].index();
+        let head = view.get_index(ids[0]).unwrap().index();
+        let tail = view.get_index(ids[7]).unwrap().index();
         assert!(
             harmonic[head] > harmonic[tail],
             "head hub {} should beat tail {}",
@@ -799,7 +799,7 @@ mod tests {
         let (view, ids) = line_graph(10_000);
         let index = FlatGraphIndex::from_view(&view, &[EdgeType::Calls]);
         let harmonic = HyperBallHarmonic::compute_flat(&index, 12);
-        let head = view.uuid_to_index[&ids[0]].index();
+        let head = view.get_index(ids[0]).unwrap().index();
         assert!(harmonic[head] > 0.0);
         assert!(harmonic.iter().any(|&s| s > 0.0));
     }
@@ -893,7 +893,7 @@ mod tests {
         let sampled = SampledBetweenness::compute_flat(&index, 64, 42);
         let exact_map = BetweennessCentrality::compute_unbounded(&view, &[EdgeType::Calls]);
         for node in &line_nodes {
-            let flat_idx = view.uuid_to_index[&node.id].index();
+            let flat_idx = view.get_index(node.id).unwrap().index();
             let got = sampled[flat_idx];
             let want = exact_map.get(&node.id).copied().unwrap_or(0.0);
             assert!(

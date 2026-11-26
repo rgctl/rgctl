@@ -50,10 +50,10 @@ This document specifies the **Dominator Tree, Post-Dominator Tree, and Dominance
 
 | Concept | Theoretical Origin | How `rgctl` Applies It in Rust |
 | :--- | :--- | :--- |
-| **Simple, Fast Iterative Dominance (CHK)** | Cooper, Harvey & Kennedy (2001), *A Simple, Fast Dominance Algorithm* (*Software: Practice and Experience*, 31(4)) | [`DominatorTree::build`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs#L45-L185) numbers reachable CFG blocks in Reverse Post-Order (RPO) and iteratively intersects immediate dominators along RPO fingers (`intersect(b1, b2)`) until fixed-point convergence. |
+| **Simple, Fast Iterative Dominance (CHK)** | Cooper, Harvey & Kennedy (2001), *A Simple, Fast Dominance Algorithm* (*Software: Practice and Experience*, 31(4)) | [`DominatorTree::build`](../../crates/rgctl-analysis/src/dominance.rs#L45-L185) numbers reachable CFG blocks in Reverse Post-Order (RPO) and iteratively intersects immediate dominators along RPO fingers (`intersect(b1, b2)`) until fixed-point convergence. |
 | **Dominance Frontiers ($DF$)** | Cytron, Ferrante, Rosen, Wegman & Zadeck (1991), *Efficiently Computing Static Single Assignment Form and the Control Dependence Graph* | For every join block $b$ with $|\text{preds}(b)| \ge 2$, a runner walks up the dominator tree from each predecessor $p \in \text{preds}(b)$ until reaching $\text{idom}(b)$, inserting $b$ into $DF(runner)$. |
-| **Post-Dominance & Control Dependence** | Ferrante, Ottenstein & Warren (1987), *The Program Dependence Graph and Its Use in Optimization* | [`PostDominatorTree::build`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs#L190-L310) runs CHK dominance on the reverse CFG rooted at `cfg.exit`. For every branch edge $(A \to B)$ where $B$ does not post-dominate $A$, all nodes on the post-dominator tree path from $B$ up to (excluding) $\text{ipdom}(A)$ are control-dependent on $A$. |
-| **Single-Entry Single-Exit (SESE) Hammocks** | Johnson, Pearson & Pingali (1994), *The Program Structure Tree: Computing Control Regions in Linear Time* | [`fragment_clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/fragment_clones.rs#L1-L140) pairs block $p$ dominates $q$ with $q$ post-dominates $p$ to extract self-contained SESE hammock subgraphs for 1-WL structural clone detection (`rgctl clones --mode fragment`). |
+| **Post-Dominance & Control Dependence** | Ferrante, Ottenstein & Warren (1987), *The Program Dependence Graph and Its Use in Optimization* | [`PostDominatorTree::build`](../../crates/rgctl-analysis/src/dominance.rs#L190-L310) runs CHK dominance on the reverse CFG rooted at `cfg.exit`. For every branch edge $(A \to B)$ where $B$ does not post-dominate $A$, all nodes on the post-dominator tree path from $B$ up to (excluding) $\text{ipdom}(A)$ are control-dependent on $A$. |
+| **Single-Entry Single-Exit (SESE) Hammocks** | Johnson, Pearson & Pingali (1994), *The Program Structure Tree: Computing Control Regions in Linear Time* | [`fragment_clones.rs`](../../crates/rgctl-analysis/src/fragment_clones.rs#L1-L140) pairs block $p$ dominates $q$ with $q$ post-dominates $p$ to extract self-contained SESE hammock subgraphs for 1-WL structural clone detection (`rgctl clones --mode fragment`). |
 
 ---
 
@@ -92,7 +92,7 @@ pub struct PostDominatorTree {
 
 ### 4.1 CLI Commands
 
-Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs#L95-L120):
+Verified against `rgctl inspect --help` and [`src/cli/inspect.rs`](../../src/cli/inspect.rs#L95-L120):
 
 ```bash
 # Inspect immediate dominator tree for a function
@@ -107,7 +107,7 @@ rgctl inspect <symbol> dom --frontiers -f mermaid
 
 ### 4.2 JSON Schema (`rgctl inspect <symbol> dom --frontiers -f json`)
 
-Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs):
+Implemented in [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs):
 
 ```json
 {
@@ -141,11 +141,11 @@ Implemented in [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl
 
 | Component | Source File | Key Types & Functions |
 | :--- | :--- | :--- |
-| **Dominator & Post-Dominator Engine** | [`crates/rgctl-analysis/src/dominance.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/dominance.rs) | `DominatorTree`, `PostDominatorTree`, `intersect`, `compute_frontiers` |
-| **PDG Control Dependence Lowering** | [`crates/rgctl-analysis/src/pdg.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/pdg.rs) | `ProgramDependenceGraph::build`, `compute_control_dependencies` |
-| **SESE Hammock Region Extraction** | [`crates/rgctl-analysis/src/fragment_clones.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/crates/rgctl-analysis/src/fragment_clones.rs) | `extract_sese_regions` |
-| **CLI Inspect Command** | [`src/cli/inspect.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect.rs), [`src/cli/inspect_output.rs`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/src/cli/inspect_output.rs) | `InspectLayer::Dom`, `inspect_dom_json`, `dom_to_mermaid` |
-| **Dashboard Dominator View** | [`dashboard/src/DataflowView.tsx`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/DataflowView.tsx), [`dashboard/src/dataflowEngine.ts`](file:///Users/sshaaf/git/rust/rgctl/rbuilder/dashboard/src/dataflowEngine.ts) | `computeDominatorGraph` |
+| **Dominator & Post-Dominator Engine** | [`crates/rgctl-analysis/src/dominance.rs`](../../crates/rgctl-analysis/src/dominance.rs) | `DominatorTree`, `PostDominatorTree`, `intersect`, `compute_frontiers` |
+| **PDG Control Dependence Lowering** | [`crates/rgctl-analysis/src/pdg.rs`](../../crates/rgctl-analysis/src/pdg.rs) | `ProgramDependenceGraph::build`, `compute_control_dependencies` |
+| **SESE Hammock Region Extraction** | [`crates/rgctl-analysis/src/fragment_clones.rs`](../../crates/rgctl-analysis/src/fragment_clones.rs) | `extract_sese_regions` |
+| **CLI Inspect Command** | [`src/cli/inspect.rs`](../../src/cli/inspect.rs), [`src/cli/inspect_output.rs`](../../src/cli/inspect_output.rs) | `InspectLayer::Dom`, `inspect_dom_json`, `dom_to_mermaid` |
+| **Dashboard Dominator View** | [`dashboard/src/DataflowView.tsx`](../../dashboard/src/DataflowView.tsx), [`dashboard/src/dataflowEngine.ts`](../../dashboard/src/dataflowEngine.ts) | `computeDominatorGraph` |
 
 ---
 
