@@ -19,11 +19,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Panel, Unavailable, Chip } from "../shell";
 import { channelReport, loadArchitecture, scalesFor } from "../architecture";
-import { expandMembers } from "../expandEngine";
+import { expandMembers, MEMBER_EDGE_KINDS } from "../expandEngine";
 import { loadMemberIndices } from "../metagraphMembers";
 import { loadFunctions, type FunctionEntry } from "../data";
 import { STALE_CHUNK_MESSAGE, isStaleChunkError } from "../staleChunk";
 import { shouldRestoreLevel } from "./levelRestore";
+import { compareMembers, nonFunctionReason, shortKind } from "./memberKind";
+import { KIND_LEGEND, colourForKind } from "../universe/memberColours";
 import { SymbolReader } from "./SymbolReader";
 import type { ArchitectureState, ArchitectureView, Metagraph, PackageNode } from "../architectureTypes";
 import type { HoverEntry, MemberEntry, UniverseLayer, UniverseScene } from "../universe/UniverseScene";
@@ -426,6 +428,13 @@ export function ArchitectureRoom({
   const openSymbol = useCallback(async (member: MemberEntry | null) => {
     if (!member) return;
     setMemberState({ kind: "resolving", member });
+    // Answered before the index is asked: a file node is not a function, and saying "the CFG index does not reach
+    // it" about one sends the reader looking for a missing artifact that was never meant to exist.
+    const kindReason = nonFunctionReason(member.nodeTypeName, member.name);
+    if (kindReason) {
+      setMemberState({ kind: "failed", member, reason: kindReason });
+      return;
+    }
     const functions = await loadFunctions();
     const matches = functions.filter(
       (f) => f.name === member.name && (!member.filePath || f.file_path === member.filePath),
@@ -505,6 +514,10 @@ export function ArchitectureRoom({
         // A press anywhere on the map stops the drift. Reported by the scene rather than inferred here, because a
         // click on empty space is still a click, and the toggle has to keep telling the truth about it.
         created.onPressChange(() => setDrift(false));
+        // The scene also parks the drift when a level opens and restores it when the level closes. The toggle is the
+        // reader's only view of that state, so it follows what the scene actually did rather than what it was asked
+        // for last.
+        created.onDriftChangeReport(setDrift);
         created.onMemberPickChange((member) => pickMemberRef.current(member));
         created.onMemberOpen((member) => void openSymbolRef.current(member));
         created.onExplode((entry) => void expandRef.current(entry));
@@ -642,12 +655,19 @@ export function ArchitectureRoom({
               </div>
             </div>
           )}
-          <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
-            <Chip tone={layer === "packages" ? "blue" : "zinc"}>
-              {layer === "packages" ? "namespace › package" : "communities (aggregated)"}
-            </Chip>
-            <Chip tone="zinc">{edges ? "coupling drawn" : "coupling hidden"}</Chip>
-          </div>
+          {/*
+            The layer chips describe the universe: which layer it is drawing and whether its coupling web is on.
+            Inside a level the universe is hidden, so they described something not on screen — the level's own
+            read-out says what is.
+          */}
+          {!expanded && (
+            <div className="pointer-events-none absolute left-2 top-2 flex gap-1">
+              <Chip tone={layer === "packages" ? "blue" : "zinc"}>
+                {layer === "packages" ? "namespace › package" : "communities (aggregated)"}
+              </Chip>
+              <Chip tone="zinc">{edges ? "coupling drawn" : "coupling hidden"}</Chip>
+            </div>
+          )}
           {hover && (
             <div className="pointer-events-none absolute bottom-2 left-2 max-w-[420px] rounded border border-white/12 bg-black/80 p-2">
               <div className="text-[11px] font-semibold text-zinc-100">{hover.title}</div>
@@ -674,6 +694,8 @@ export function ArchitectureRoom({
               </button>
             </div>
           )}
+
+          {expanded && <LevelReadout stats={expanded} />}
 
           <div className="absolute bottom-2 right-2 flex gap-1">
             <Toggle on={layer === "packages"} onClick={() => setLayer("packages")}>namespace › package</Toggle>
@@ -954,6 +976,56 @@ function Coverage({ view }: { view: ArchitectureView }) {
  * was when this was first added, leaving "how do I find the filter?" as a fair question. The control beside
  * Expand cannot be clipped, so the search lives in both places.
  */
+
+/**
+ * What the open level is, in the corner of the drawing.
+ *
+ * Its own component for one reason: this text was deleted by a refactor and **nothing failed** — the level still
+ * drew, the typecheck still passed, and only a screenshot showed it was gone. A component can be tested with a
+ * fabricated level; a fragment inside a 1,100-line render that needs a WASM-expanded district cannot.
+ *
+ * Every number here is a count the room can defend: drawn vs total (with the truncation rule when they differ),
+ * the member edges and their one kind, the aggregate coupling that leaves the level, and the measured open time.
+ * The two caveats — heights are constant, the universe is hidden — are stated rather than left to be discovered.
+ */
+export function LevelReadout({ stats }: { stats: LevelStats }) {
+  return (
+    <div
+      data-testid="level-readout"
+      className="absolute right-2 top-2 flex max-w-[340px] flex-col gap-0.5 rounded-md border border-sky-500/30 bg-[#0a1420]/95 px-2 py-1.5"
+    >
+      <span className="text-[11px] font-medium leading-none text-sky-100">{stats.title}</span>
+      <span className="text-[10px] leading-relaxed text-sky-200/80">
+        {stats.drawn.toLocaleString()} of {stats.members.toLocaleString()} members drawn
+        {stats.truncated ? " (largest by member count; the rest are not drawn)" : ""} ·{" "}
+        {stats.edges.toLocaleString()} member edges ({MEMBER_EDGE_KINDS})
+        {stats.boundary > 0 ? ` · ${stats.boundary} outgoing coupling edges fading outward` : ""} ·{" "}
+        {(stats.ms / 1000).toFixed(1)} s
+      </span>
+      <span className="text-[10px] leading-relaxed text-zinc-500">
+        the universe is hidden while this level is open — the arrow or esc returns to it, same angle
+      </span>
+      {!stats.measuredHeight && (
+        <span className="text-[10px] leading-relaxed text-amber-200/80">
+          heights are constant — this bundle reports no per-member complexity
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What a level reports about itself, so `LevelReadout` can be tested without one. */
+export interface LevelStats {
+  title: string;
+  drawn: number;
+  members: number;
+  edges: number;
+  truncated: boolean;
+  ms: number;
+  measuredHeight: boolean;
+  boundary: number;
+}
+
 /**
  * The symbol a level opened, read beside it.
  *
@@ -1050,7 +1122,8 @@ function Members({
    * underneath says how many are hidden rather than implying the list is the whole level.
    */
   const MAX_ROWS = 5;
-  const sorted = useMemo(() => [...nodes].sort((a, b) => a.name.localeCompare(b.name)), [nodes]);
+  // Functions first, then the rest by name; see `compareMembers` for why the order is load-bearing.
+  const sorted = useMemo(() => [...nodes].sort(compareMembers), [nodes]);
   const needle = query.trim().toLowerCase();
   const matched = needle ? sorted.filter((n) => n.name.toLowerCase().includes(needle)) : sorted;
   const rows = matched.slice(0, MAX_ROWS);
@@ -1064,6 +1137,22 @@ function Members({
         aria-label="Filter the level's members by name"
         className="mb-1.5 w-full rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-sky-400/60 focus:outline-none"
       />
+      {/*
+        The legend is not decoration: colour is the only channel that says *what* a box is, and an unexplained colour
+        is a puzzle. Six families rather than fifteen kinds, because the exact kind is on every row.
+      */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {KIND_LEGEND.map((entry) => (
+          <span key={entry.label} className="flex items-center gap-1 text-[9.5px] leading-none text-zinc-500">
+            <span
+              aria-hidden
+              className="inline-block h-2 w-2 rounded-[1px]"
+              style={{ backgroundColor: entry.colour }}
+            />
+            {entry.label}
+          </span>
+        ))}
+      </div>
       <ul className="max-h-[46vh] overflow-y-auto">
         {rows.map((node) => {
           const selected = node.index === selectedIndex;
@@ -1078,10 +1167,26 @@ function Members({
                   selected ? "bg-amber-400/12 text-amber-100" : "text-zinc-300 hover:bg-white/[0.05]"
                 }`}
               >
-                <span className="truncate font-mono text-[11px]">{node.name}</span>
-                <span className="ml-auto shrink-0 truncate text-[9.5px] text-zinc-500">
-                  {node.filePath?.split("/").pop() ?? node.kind}
+                {/*
+                  Six characters and the kind's own colour, the same colour the box has in the level. The caption was
+                  `FUNCTI…` before — three quarters of a word in a column wide enough to crowd the name it labels.
+                */}
+                <span
+                  className="w-[42px] shrink-0 truncate font-mono text-[9.5px] leading-none"
+                  style={{ color: colourForKind(node.kind) }}
+                >
+                  {shortKind(node.kind)}
                 </span>
+                <span className="truncate font-mono text-[11px]">{node.name}</span>
+                {/*
+                  The file only where it adds something: a file node's name *is* its path, so repeating the basename
+                  would give the row two spellings of the same thing and no room for the name itself.
+                */}
+                {node.filePath && node.filePath.split("/").pop() !== node.name && (
+                  <span className="ml-auto shrink-0 truncate text-[9.5px] text-zinc-500">
+                    {node.filePath.split("/").pop()}
+                  </span>
+                )}
               </button>
             </li>
           );

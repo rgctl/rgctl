@@ -23,6 +23,7 @@ import { resetArchitectureCache } from "../architecture";
 /** The callbacks the room installed on the scene, as the scene would have received them. */
 const installed: {
   press?: () => void;
+  drift?: (on: boolean) => void;
   explode?: (entry: { kind: string; id?: number; title: string } | null) => void;
   memberOpen?: (member: unknown) => void;
   memberPick?: (member: unknown) => void;
@@ -51,6 +52,9 @@ vi.mock("../universe/UniverseScene", () => ({
     }
     onPressChange(fn: () => void) {
       installed.press = fn;
+    }
+    onDriftChangeReport(fn: (on: boolean) => void) {
+      installed.drift = fn;
     }
     attachPointer() {}
     setEdges() {}
@@ -104,6 +108,7 @@ afterEach(() => {
   // satisfies the next test's `waitFor` and quietly tests nothing — the same shape of defect as the `skip:` that
   // reported success in `tests/http_serve.rs`.
   installed.press = undefined;
+  installed.drift = undefined;
   installed.explode = undefined;
   installed.memberOpen = undefined;
   installed.memberPick = undefined;
@@ -155,6 +160,28 @@ describe("the scene's callbacks reach the room", () => {
       installed.press?.();
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /drift off/i })).toBeTruthy());
+  });
+
+  it("follows the drift the scene actually applied", async () => {
+    stubBundle();
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })}
+      >
+        <ArchitectureRoom />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(installed.drift).toBeTypeOf("function"), { timeout: 5000 });
+    expect(screen.getByRole("button", { name: /drift on/i })).toBeTruthy();
+
+    // Opening a level parks the drift in the scene; the toggle has to stop claiming otherwise. Verified by eye:
+    // two screenshots three seconds apart in a level were byte-identical while the toggle read "drift on".
+    await act(async () => installed.drift?.(false));
+    await waitFor(() => expect(screen.getByRole("button", { name: /drift off/i })).toBeTruthy());
+
+    // And closing the level restores it, so the toggle comes back.
+    await act(async () => installed.drift?.(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: /drift on/i })).toBeTruthy());
   });
 
   /**
