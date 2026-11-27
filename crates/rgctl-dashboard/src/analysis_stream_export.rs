@@ -62,6 +62,14 @@ pub fn export_cfg_slice_from_storage(
     export_cfg_slice_from_storage_with_index(graph, repo_root, out_dir, None)
 }
 
+/// Whether per-function detail files are written inline, or folded into one record pack.
+///
+/// A property of the *count*, so it can be tested at its boundary without building a cache: `<=`, not `<`, because
+/// the limit is the largest corpus that still gets one file per function.
+fn details_are_inline(function_count: usize, limit: usize) -> bool {
+    function_count <= limit
+}
+
 /// Analysis index as loaded from `analysis_index.bin` (`stable_key` → entry).
 pub type AnalysisIndexMap = HashMap<String, AnalysisIndexEntry>;
 
@@ -94,8 +102,8 @@ pub fn export_cfg_slice_from_storage_with_index(
     }
 
     let meta_map = function_meta_map_with_index(repo_root, graph, Some(index));
-    let write_cfg_details = index.len() <= CFG_DETAIL_INLINE_LIMIT;
-    let write_slice_details = index.len() <= SLICE_DETAIL_INLINE_LIMIT;
+    let write_cfg_details = details_are_inline(index.len(), CFG_DETAIL_INLINE_LIMIT);
+    let write_slice_details = details_are_inline(index.len(), SLICE_DETAIL_INLINE_LIMIT);
 
     let slice_dir = out_dir.join(SLICE_DETAIL_DIR);
     if slice_dir.exists() {
@@ -427,12 +435,108 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    /// A cache large enough to cross `SLICE_DETAIL_INLINE_LIMIT`, built by the test.
+    ///
+    /// The record-pack path — where slice details stop being per-file JSON and become one packed stream — used to be
+    /// covered only by a test that read `example/metasfresh-4.9.8b/.rgctl/analysis`, i.e. by a 4.5 GB cache that a
+    /// clean checkout does not have. On a machine that *did* have one but stale (an `analysis_index.bin` newer than
+    /// its `analysis.pack.bin`), the test failed on a code path it was never meant to be testing. This builds the
+    /// threshold it actually cares about out of `SLICE_DETAIL_INLINE_LIMIT + 1` synthesized functions: same
+    /// behaviour, deterministic, no corpus.
+    ///
+    /// **`#[ignore]`d on measurement, not on doubt:** 5 001 functions through `AnalysisStorage` and back takes about
+    /// 98 s here, which is a gate nobody would keep enabled. The boundary itself is covered instantly by
+    /// `details_are_inline`; this is the end-to-end proof that the pack is what gets written, and it is run on
+    /// purpose:
+    ///
+    /// ```text
+    /// cargo test -p rgctl-dashboard --lib streams_slice_and_cfg_past_the_inline_limit -- --ignored --nocapture
+    /// ```
     #[test]
+    #[ignore = "~98 s: 5 001 synthesized functions through storage and back; run deliberately"]
+    fn streams_slice_and_cfg_past_the_inline_limit() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let analysis_dir = repo.join(".rgctl/analysis");
+        let src_dir = repo.join("src");
+        let out = tmp.path().join("dashboard");
+        std::fs::create_dir_all(&analysis_dir).unwrap();
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+
+        // One more function than the limit, because the condition is `<=`.
+        let count = SLICE_DETAIL_INLINE_LIMIT + 1;
+        let storage = AnalysisStorage::new(&analysis_dir);
+        let mut ids = Vec::with_capacity(count);
+        for i in 0..count {
+            let name = format!("f{i}");
+            let code = format!("fn {name}(a: i32) -> i32 {{ a }}");
+            let file = format!("src/f{i}.rs");
+            std::fs::write(repo.join(&file), &code).unwrap();
+            let cfg = build_cfg_for_function("rust", &code, &name).unwrap();
+            let pdg = ProgramDependenceGraph::build(&cfg, code.as_bytes()).unwrap();
+            let id = Uuid::new_v4();
+            storage
+                .save_function(&FunctionAnalysis {
+                    function_id: id,
+                    function_name: name,
+                    file_path: file,
+                    code_hash: Some(format!("hash{i}")),
+                    cfg: Some(Arc::new(cfg)),
+                    pdg: Some(Arc::new(pdg)),
+                    dominance: None,
+                    taint: None,
+                })
+                .unwrap();
+            ids.push(id);
+        }
+
+        let backend = MemoryBackend::new();
+        let result =
+            export_cfg_slice_from_storage(GraphSource::memory(&backend), &repo, &out).unwrap();
+
+        assert!(result.slice.available, "slice export should succeed");
+        assert!(result.cfg.available, "cfg export should succeed");
+        assert_eq!(result.slice.function_count, count);
+        assert!(
+            result.slice.record_pack,
+            "crossing SLICE_DETAIL_INLINE_LIMIT must switch to the record pack"
+        );
+        // The pack's own files, and no per-file slice flood beside them.
+        assert!(out.join(SLICE_RECORD_INDEX_FILE).is_file());
+        assert!(out.join(SLICE_RECORD_DATA_FILE).is_file());
+        assert!(
+            !out.join(SLICE_DETAIL_DIR).is_dir(),
+            "past the limit the slice/ directory must not be written"
+        );
+        assert!(out.join(SLICE_INDEX_FILE).is_file());
+        assert!(out.join(CFG_INDEX_FILE).is_file());
+        assert_eq!(ids.len(), count);
+    }
+
+    /// The metasfresh corpus gate, kept for what only a real corpus can show.
+    ///
+    /// Now `#[ignore]` and driven by `METASFRESH_REPO`, like the other cold gates: a developer whose `example/` holds
+    /// a stale cache is not running this by accident, and CI never sees it. Run it deliberately:
+    ///
+    /// ```text
+    /// METASFRESH_REPO=example/metasfresh-4.9.8b cargo test -p rgctl-dashboard --lib \
+    ///     streams_slice_and_cfg_from_metasfresh_cache -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a prepared metasfresh analysis cache; set METASFRESH_REPO and run with --ignored"]
     fn streams_slice_and_cfg_from_metasfresh_cache() {
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../example/metasfresh-4.9.8b");
+        let repo = match std::env::var_os("METASFRESH_REPO") {
+            Some(path) => std::path::PathBuf::from(path),
+            None => std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../example/metasfresh-4.9.8b"),
+        };
         let analysis_dir = repo.join(".rgctl/analysis");
         if !analysis_dir.is_dir() {
+            eprintln!(
+                "skip: no metasfresh analysis cache at {} — set METASFRESH_REPO to a prepared corpus",
+                analysis_dir.display()
+            );
             return;
         }
         let out = tempfile::TempDir::new().unwrap();
@@ -546,5 +650,29 @@ mod tests {
         assert!(out.join("cfg_index.json").is_file());
         assert!(out.join(SLICE_RECORD_INDEX_FILE).is_file());
         assert!(out.join(SLICE_RECORD_DATA_FILE).is_file());
+    }
+
+    /// The threshold, at the two counts that decide it.
+    #[test]
+    fn the_inline_limit_is_inclusive() {
+        assert!(details_are_inline(0, SLICE_DETAIL_INLINE_LIMIT));
+        assert!(
+            details_are_inline(SLICE_DETAIL_INLINE_LIMIT, SLICE_DETAIL_INLINE_LIMIT),
+            "the limit itself still writes one file per function"
+        );
+        assert!(
+            !details_are_inline(SLICE_DETAIL_INLINE_LIMIT + 1, SLICE_DETAIL_INLINE_LIMIT),
+            "one past the limit must switch to the record pack"
+        );
+        // Both exports have their own ceiling — equal today, and both inclusive — so a future divergence is covered
+        // by the same rule rather than by an assumption about which is tighter.
+        assert!(details_are_inline(
+            CFG_DETAIL_INLINE_LIMIT,
+            CFG_DETAIL_INLINE_LIMIT
+        ));
+        assert!(!details_are_inline(
+            CFG_DETAIL_INLINE_LIMIT + 1,
+            CFG_DETAIL_INLINE_LIMIT
+        ));
     }
 }
