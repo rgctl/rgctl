@@ -454,6 +454,50 @@ async fn spa_index(dir: &Path) -> Response {
 }
 
 #[cfg(test)]
+mod cache_policy_tests {
+    use super::*;
+
+    #[test]
+    fn data_files_must_be_revalidated() {
+        // The defect: these have fixed URLs for every repository, so a cached copy is another repo's numbers.
+        for path in [
+            "/",
+            "/metagraph.json",
+            "/communities.json",
+            "/manifest.json",
+            "/graph_payload.bin",
+            "/metanode_members.bin",
+            "/taint/shard.json",
+            "/architecture",
+        ] {
+            assert_eq!(cache_control_for(path), "no-cache", "{path}");
+        }
+    }
+
+    #[test]
+    fn content_hashed_assets_stay_cacheable() {
+        // `assets/index.v2-8LyXOaho.js` means one thing forever, so a year is correct and makes reloads cheap.
+        for path in ["/assets/index.v2-8LyXOaho.js", "/assets/index-C5raQVw-.css"] {
+            assert!(
+                cache_control_for(path).contains("immutable"),
+                "{path} should be immutable-cacheable"
+            );
+        }
+    }
+
+    #[test]
+    fn the_header_lands_on_the_response() {
+        let response = Response::new(Body::empty());
+        let stamped = with_cache_policy(response, "/metagraph.json");
+        let value = stamped
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok());
+        assert_eq!(value, Some("no-cache"));
+    }
+}
+
+#[cfg(test)]
 mod client_route_tests {
     use super::*;
 
@@ -512,6 +556,35 @@ mod client_route_tests {
     }
 }
 
+/// What a browser may cache for a file the dashboard serves.
+///
+/// The bundle's data files have **fixed URLs** — `/metagraph.json`, `/graph_payload.bin` — and every repository
+/// serves the same names on the same origin. `serve` sent `Last-Modified` and nothing else, so browsers applied
+/// heuristic freshness (about 10% of the file's age, i.e. minutes) and replayed one repository's index against
+/// another repository's server: open `example/linux` on port 8080 after looking at the dashboard for a different
+/// repo and the room confidently reported the *previous* repo's counts. Naming a caching policy is the fix;
+/// "no header" is a policy too, and it was the wrong one.
+///
+/// Content-hashed assets keep the opposite treatment, because their URL *is* their identity: `index.v2-8LyXOaho.js`
+/// can never mean anything else, so caching it for a year is correct and makes a reload cheap.
+fn cache_control_for(path: &str) -> &'static str {
+    // `/assets/` holds only Vite's content-hashed output; `assets/metanode_members.bin` would not be hashed, but
+    // it is not written there — the bundle's data lives at the root of the dashboard directory.
+    if path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
+/// Stamp the policy onto a response. Split out so the header is asserted directly, without a listener.
+fn with_cache_policy(mut response: Response, path: &str) -> Response {
+    if let Ok(value) = axum::http::HeaderValue::from_str(cache_control_for(path)) {
+        response.headers_mut().insert(header::CACHE_CONTROL, value);
+    }
+    response
+}
+
 async fn dashboard_fallback(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -536,15 +609,15 @@ async fn dashboard_fallback(
         if is_client_route(&method, &path)
             && client_route_shadowed_by_data_dir(&state.dashboard_dir, &path)
         {
-            return spa_index(&state.dashboard_dir).await;
+            return with_cache_policy(spa_index(&state.dashboard_dir).await, &path);
         }
 
         let svc = ServeDir::new(&state.dashboard_dir).append_index_html_on_directories(true);
         let response = svc.oneshot(req).await.into_response();
         if response.status() == StatusCode::NOT_FOUND && is_client_route(&method, &path) {
-            return spa_index(&state.dashboard_dir).await;
+            return with_cache_policy(spa_index(&state.dashboard_dir).await, &path);
         }
-        return response;
+        return with_cache_policy(response, &path);
     }
     let wants_json = headers
         .get(header::ACCEPT)
